@@ -1,0 +1,242 @@
+version: '3.8'
+
+services:
+  # API Gateway
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: ./docker/api-gateway/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - AUTH_SERVICE_URL=http://auth-service:3001
+      - CLASS_SERVICE_URL=http://class-service:3002
+      - CONTENT_SERVICE_URL=http://content-service:3003
+      - ENROLLMENT_SERVICE_URL=http://enrollment-service:3004
+      - QA_SERVICE_URL=http://qa-service:3005
+      - PROFILE_SERVICE_URL=http://profile-service:3006
+    depends_on:
+      - auth-service
+      - class-service
+      - content-service
+      - enrollment-service
+      - qa-service
+      - profile-service
+    networks:
+      - postply-network
+
+  # Auth Service
+  auth-service:
+    build:
+      context: ..
+      dockerfile: ./docker/auth-service/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@auth-db:5432/auth_db
+      - JWT_SECRET=postply-secret-key
+      - JWT_EXPIRES_IN=7d
+    depends_on:
+      - auth-db
+    networks:
+      - postply-network
+
+  # Class Service
+  class-service:
+    build:
+      context: ..
+      dockerfile: ./docker/class-service/Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=development
+      - PORT=3002
+      - DATABASE_URL=postgresql://postgres:postgres@class-db:5432/class_db
+      - JWT_SECRET=postply-secret-key
+    depends_on:
+      - class-db
+    networks:
+      - postply-network
+
+  # Content Service
+  content-service:
+    build:
+      context: ..
+      dockerfile: ./docker/content-service/Dockerfile
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=development
+      - PORT=3003
+      - DATABASE_URL=postgresql://postgres:postgres@content-db:5432/content_db
+      - JWT_SECRET=postply-secret-key
+      - STORAGE_PATH=/app/uploads
+    volumes:
+      - content-uploads:/app/uploads
+    depends_on:
+      - content-db
+    networks:
+      - postply-network
+
+  # Enrollment Service
+  enrollment-service:
+    build:
+      context: ..
+      dockerfile: ./docker/enrollment-service/Dockerfile
+    ports:
+      - "3004:3004"
+    environment:
+      - NODE_ENV=development
+      - PORT=3004
+      - DATABASE_URL=postgresql://postgres:postgres@enrollment-db:5432/enrollment_db
+      - JWT_SECRET=postply-secret-key
+    depends_on:
+      - enrollment-db
+    networks:
+      - postply-network
+
+  # QA Service
+  qa-service:
+    build:
+      context: ..
+      dockerfile: ./docker/qa-service/Dockerfile
+    ports:
+      - "3005:3005"
+    environment:
+      - NODE_ENV=development
+      - PORT=3005
+      - DATABASE_URL=postgresql://postgres:postgres@qa-db:5432/qa_db
+      - JWT_SECRET=postply-secret-key
+    depends_on:
+      - qa-db
+    networks:
+      - postply-network
+
+  # Profile Service
+  profile-service:
+    build:
+      context: ..
+      dockerfile: ./docker/profile-service/Dockerfile
+    ports:
+      - "3006:3006"
+    environment:
+      - NODE_ENV=development
+      - PORT=3006
+      - DATABASE_URL=postgresql://postgres:postgres@profile-db:5432/profile_db
+      - JWT_SECRET=postply-secret-key
+      - STORAGE_PATH=/app/uploads
+    volumes:
+      - profile-uploads:/app/uploads
+    depends_on:
+      - profile-db
+    networks:
+      - postply-network
+
+  # Frontend
+  frontend:
+    build:
+      context: ..
+      dockerfile: ./docker/frontend/Dockerfile
+    ports:
+      - "8080:80"
+    depends_on:
+      - api-gateway
+    networks:
+      - postply-network
+
+  # Databases
+  auth-db:
+    image: postgres:14
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=auth_db
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+  class-db:
+    image: postgres:14
+    ports:
+      - "5433:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=class_db
+    volumes:
+      - class-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+  content-db:
+    image: postgres:14
+    ports:
+      - "5434:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=content_db
+    volumes:
+      - content-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+  enrollment-db:
+    image: postgres:14
+    ports:
+      - "5435:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=enrollment_db
+    volumes:
+      - enrollment-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+  qa-db:
+    image: postgres:14
+    ports:
+      - "5436:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=qa_db
+    volumes:
+      - qa-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+  profile-db:
+    image: postgres:14
+    ports:
+      - "5437:5432"
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=profile_db
+    volumes:
+      - profile-db-data:/var/lib/postgresql/data
+    networks:
+      - postply-network
+
+networks:
+  postply-network:
+    driver: bridge
+
+volumes:
+  auth-db-data:
+  class-db-data:
+  content-db-data:
+  enrollment-db-data:
+  qa-db-data:
+  profile-db-data:
+  content-uploads:
+  profile-uploads:

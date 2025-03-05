@@ -1,0 +1,23 @@
+services:
+  postgres:
+    container_name: postply-postgres
+    image: postgres:14
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postply
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+
+networks:
+  postply-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
