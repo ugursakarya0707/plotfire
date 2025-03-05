@@ -210,7 +210,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Contact
 
-Your Name - your.email@example.com
+Ugur Sakarya - ugur@plotcamp.com
 
 Project Link: [https://github.com/your-username/postply](https://github.com/your-username/postply)
 >>>>>>> c6a8bf3 (First Commit: First version of Postply)
