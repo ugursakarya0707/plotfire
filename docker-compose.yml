@@ -1,4 +1,5 @@
 services:
+  # Main PostgreSQL database
   postgres:
     container_name: postply-postgres
     image: postgres:14
@@ -13,6 +14,102 @@ services:
     restart: unless-stopped
     networks:
       - postply-network
+      
+  # Auth Service Database
+  auth-db:
+    container_name: postply-auth-db
+    image: postgres:14
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: auth_db
+    volumes:
+      - auth_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+      
+  # Class Service Database
+  class-db:
+    container_name: postply-class-db
+    image: postgres:14
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: class_db
+    volumes:
+      - class_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+      
+  # Content Service Database
+  content-db:
+    container_name: postply-content-db
+    image: postgres:14
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: content_db
+    volumes:
+      - content_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+      
+  # Enrollment Service Database
+  enrollment-db:
+    container_name: postply-enrollment-db
+    image: postgres:14
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: enrollment_db
+    volumes:
+      - enrollment_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+      
+  # QA Service Database
+  qa-db:
+    container_name: postply-qa-db
+    image: postgres:14
+    ports:
+      - "5437:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: qa_db
+    volumes:
+      - qa_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
+      
+  # Profile Service Database
+  profile-db:
+    container_name: postply-profile-db
+    image: postgres:14
+    ports:
+      - "5438:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: profile_db
+    volumes:
+      - profile_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - postply-network
 
 networks:
   postply-network:
@@ -20,4 +117,16 @@ networks:
 
 volumes:
   postgres_data:
+    driver: local
+  auth_db_data:
+    driver: local
+  class_db_data:
+    driver: local
+  content_db_data:
+    driver: local
+  enrollment_db_data:
+    driver: local
+  qa_db_data:
+    driver: local
+  profile_db_data:
     driver: local
