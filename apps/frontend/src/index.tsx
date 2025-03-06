@@ -6,7 +6,7 @@ import { ReactQueryDevtools } from 'react-query/devtools';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import App from './App';
-import { AuthProvider } from './context/AuthContext';
+import { AuthProvider } from './contexts/AuthContext';
 import theme from './theme';
 import './index.css';
 

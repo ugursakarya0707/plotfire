@@ -110,6 +110,22 @@ services:
     restart: unless-stopped
     networks:
       - postply-network
+      
+  # Teacher Conference Service Database
+  teacher-conference-db:
+    container_name: postply-teacher-conference-db
+    image: mongo:5.0
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: mongodb
+      MONGO_INITDB_ROOT_PASSWORD: mongodb
+      MONGO_INITDB_DATABASE: teacher_conference_db
+    volumes:
+      - teacher_conference_db_data:/data/db
+    restart: unless-stopped
+    networks:
+      - postply-network
 
 networks:
   postply-network:
@@ -129,4 +145,6 @@ volumes:
   qa_db_data:
     driver: local
   profile_db_data:
+    driver: local
+  teacher_conference_db_data:
     driver: local

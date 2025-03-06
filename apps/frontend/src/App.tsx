@@ -1,7 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Box, CircularProgress } from '@mui/material';
-import { useAuth } from './context/AuthContext';
+import { useAuth } from './contexts/AuthContext';
 
 // Layouts
 import MainLayout from './components/layouts/MainLayout';
@@ -18,6 +18,9 @@ import CreateClassPage from './pages/classes/CreateClassPage';
 import EditClassPage from './pages/classes/EditClassPage';
 import ProfilePage from './pages/profile/ProfilePage';
 import NotFoundPage from './pages/NotFoundPage';
+import TeacherListPage from './pages/teachers/TeacherListPage';
+import TeacherDetailPage from './pages/teachers/TeacherDetailPage';
+import FavoriteTeachersPage from './pages/teachers/FavoriteTeachersPage';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ element: React.ReactElement }> = ({ element }) => {
@@ -79,6 +82,19 @@ const App: React.FC = () => {
         <Route 
           path="/profile" 
           element={<ProtectedRoute element={<ProfilePage />} />} 
+        />
+        {/* Teacher Conference Routes */}
+        <Route 
+          path="/teachers" 
+          element={<TeacherListPage />} 
+        />
+        <Route 
+          path="/teachers/:teacherId" 
+          element={<TeacherDetailPage />} 
+        />
+        <Route 
+          path="/favorite-teachers" 
+          element={<ProtectedRoute element={<FavoriteTeachersPage />} />} 
         />
       </Route>
 
