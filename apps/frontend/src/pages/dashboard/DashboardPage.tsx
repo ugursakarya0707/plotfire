@@ -22,18 +22,24 @@ import {
   Class as ClassIcon,
   QuestionAnswer as QAIcon,
   School as SchoolIcon,
+  Person as PersonIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getClasses, getClassesByTeacherId, getEnrollmentsByStudentId } from '../../services/classService';
 import { Class, Enrollment } from '../../types/class';
+import { getAllTeacherConferences, TeacherConference } from '../../services/teacherConferenceService';
+import PendingVideoSessions from '../../components/teacher/PendingVideoSessions';
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const [classes, setClasses] = useState<Class[]>([]);
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [teachers, setTeachers] = useState<TeacherConference[]>([]);
   const [loading, setLoading] = useState(true);
+  const [teachersLoading, setTeachersLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [teachersError, setTeachersError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -70,8 +76,24 @@ const DashboardPage: React.FC = () => {
       }
     };
 
+    // Fetch teachers for all users
+    const fetchTeachers = async () => {
+      try {
+        setTeachersLoading(true);
+        const teachersList = await getAllTeacherConferences();
+        setTeachers(teachersList);
+        setTeachersError(null);
+      } catch (err: any) {
+        setTeachersError(err.message || 'Failed to fetch teachers');
+        console.error('Error fetching teachers:', err);
+      } finally {
+        setTeachersLoading(false);
+      }
+    };
+
     if (user) {
       fetchData();
+      fetchTeachers();
     }
   }, [user]);
 
@@ -97,6 +119,13 @@ const DashboardPage: React.FC = () => {
         <Alert severity="error" sx={{ mb: 4 }}>
           {error}
         </Alert>
+      )}
+
+      {/* Bekleyen Video Görüşmeleri (Sadece öğretmenler için) */}
+      {user?.userType === UserType.TEACHER && (
+        <Box sx={{ mb: 4 }}>
+          <PendingVideoSessions />
+        </Box>
       )}
 
       <Grid container spacing={4}>
@@ -224,42 +253,100 @@ const DashboardPage: React.FC = () => {
           </Card>
         </Grid>
 
-        {/* Recent Q&A */}
-        <Grid item xs={12} md={4}>
-          <Card sx={{ height: '100%' }}>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>
-                {user?.userType === UserType.STUDENT ? 'My Questions' : 'Recent Questions'}
-              </Typography>
-              <Divider sx={{ mb: 2 }} />
-              <List>
-                {recentQuestions.map((question) => (
-                  <ListItem key={question.id}>
-                    <ListItemAvatar>
-                      <Avatar>
-                        <QAIcon />
-                      </Avatar>
-                    </ListItemAvatar>
-                    <ListItemText
-                      primary={question.title}
-                      secondary={`Class: ${question.class}`}
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            </CardContent>
-            <CardActions>
-              <Button
-                component={RouterLink}
-                to="/qa"
-                size="small"
-                color="primary"
-              >
-                View All Questions
-              </Button>
-            </CardActions>
-          </Card>
-        </Grid>
+        {/* Teachers List for Students */}
+        {user?.userType === UserType.STUDENT ? (
+          <Grid item xs={12} md={4}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Available Teachers
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                {teachersLoading ? (
+                  <Box sx={{ display: 'flex', justifyContent: 'center', my: 2 }}>
+                    <CircularProgress size={24} />
+                  </Box>
+                ) : teachersError ? (
+                  <Typography variant="body2" color="error" sx={{ py: 2 }}>
+                    {teachersError}
+                  </Typography>
+                ) : teachers.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary" sx={{ py: 2 }}>
+                    No teachers available at the moment.
+                  </Typography>
+                ) : (
+                  <List>
+                    {teachers.slice(0, 3).map((teacher) => (
+                      <ListItem 
+                        key={teacher._id} 
+                        component={RouterLink} 
+                        to={`/teachers/${teacher._id}`}
+                        sx={{ textDecoration: 'none', color: 'inherit' }}
+                      >
+                        <ListItemAvatar>
+                          <Avatar>
+                            <PersonIcon />
+                          </Avatar>
+                        </ListItemAvatar>
+                        <ListItemText
+                          primary={`${teacher.firstName} ${teacher.lastName}`}
+                          secondary={teacher.hobbies.length > 0 ? `Hobbies: ${teacher.hobbies.slice(0, 2).join(', ')}${teacher.hobbies.length > 2 ? '...' : ''}` : 'No hobbies listed'}
+                        />
+                      </ListItem>
+                    ))}
+                  </List>
+                )}
+              </CardContent>
+              <CardActions>
+                <Button
+                  component={RouterLink}
+                  to="/teachers"
+                  size="small"
+                  color="primary"
+                >
+                  View All Teachers
+                </Button>
+              </CardActions>
+            </Card>
+          </Grid>
+        ) : (
+          // Recent Q&A for Teachers
+          <Grid item xs={12} md={4}>
+            <Card sx={{ height: '100%' }}>
+              <CardContent>
+                <Typography variant="h6" gutterBottom>
+                  Recent Questions
+                </Typography>
+                <Divider sx={{ mb: 2 }} />
+                <List>
+                  {recentQuestions.map((question) => (
+                    <ListItem key={question.id}>
+                      <ListItemAvatar>
+                        <Avatar>
+                          <QAIcon />
+                        </Avatar>
+                      </ListItemAvatar>
+                      <ListItemText
+                        primary={question.title}
+                        secondary={`Class: ${question.class}`}
+                      />
+                    </ListItem>
+                  ))}
+                </List>
+              </CardContent>
+              <CardActions>
+                <Button
+                  component={RouterLink}
+                  to="/qa"
+                  size="small"
+                  color="primary"
+                >
+                  View All Questions
+                </Button>
+              </CardActions>
+            </Card>
+          </Grid>
+        )}
       </Grid>
     </Container>
   );

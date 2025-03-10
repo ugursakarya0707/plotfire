@@ -7,6 +7,7 @@ export interface User {
   id: string;
   email: string;
   userType: UserType;
+  name?: string; // Kullanıcı adı için opsiyonel alan ekledik
 }
 
 export interface AuthResponse {

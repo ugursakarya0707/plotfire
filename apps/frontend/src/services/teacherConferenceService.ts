@@ -4,9 +4,11 @@ const API_URL = process.env['REACT_APP_TEACHER_CONFERENCE_API_URL'] || 'http://l
 
 export interface TeacherConference {
   _id: string;
+  id?: string; 
   teacherId: string;
   firstName: string;
   lastName: string;
+  name?: string; 
   hobbies: string[];
   isActive: boolean;
   createdAt: string;
@@ -31,7 +33,12 @@ export const getAllTeacherConferences = async (): Promise<TeacherConference[]> =
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    return await response.json();
+    const data = await response.json();
+    return data.map((teacher: TeacherConference) => ({
+      ...teacher,
+      id: teacher._id, 
+      name: `${teacher.firstName} ${teacher.lastName}` 
+    }));
   } catch (error: any) {
     console.error('Error fetching teacher conferences:', error);
     throw new Error(error.message || 'Failed to fetch teacher conferences');
@@ -47,7 +54,12 @@ export const getTeacherConferenceById = async (id: string): Promise<TeacherConfe
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    return await response.json();
+    const data = await response.json();
+    return {
+      ...data,
+      id: data._id, 
+      name: `${data.firstName} ${data.lastName}` 
+    };
   } catch (error: any) {
     console.error('Error fetching teacher conference:', error);
     throw new Error(error.message || 'Failed to fetch teacher conference');
@@ -63,7 +75,12 @@ export const getTeacherConferenceByTeacherId = async (teacherId: string): Promis
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    return await response.json();
+    const data = await response.json();
+    return {
+      ...data,
+      id: data._id, 
+      name: `${data.firstName} ${data.lastName}` 
+    };
   } catch (error: any) {
     console.error('Error fetching teacher conference by teacher ID:', error);
     throw new Error(error.message || 'Failed to fetch teacher conference');

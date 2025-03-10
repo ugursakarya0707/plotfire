@@ -20,6 +20,7 @@ import {
   Favorite as FavoriteIcon,
   FavoriteBorder as FavoriteBorderIcon,
   Person as PersonIcon,
+  Videocam as VideocamIcon,
 } from '@mui/icons-material';
 import { 
   TeacherConference, 
@@ -28,6 +29,7 @@ import {
   removeTeacherFromFavorites,
   isTeacherFavorite
 } from '../../services/teacherConferenceService';
+import { createVideoSession } from '../../services/videoConferenceService';
 import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 
@@ -39,6 +41,7 @@ const TeacherDetailPage: React.FC = () => {
   const [isFavorite, setIsFavorite] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [favoriteLoading, setFavoriteLoading] = useState<boolean>(false);
+  const [videoLoading, setVideoLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -86,6 +89,22 @@ const TeacherDetailPage: React.FC = () => {
       setError(err.message || 'Failed to update favorite status');
     } finally {
       setFavoriteLoading(false);
+    }
+  };
+
+  const handleStartVideoSession = async () => {
+    if (!teacherId || !user || user.userType !== UserType.STUDENT) return;
+    
+    try {
+      setVideoLoading(true);
+      console.log('Creating video session with:', { teacherId, userId: user.id });
+      const session = await createVideoSession(teacherId, user.id);
+      navigate(`/video-conference/${session._id}`);
+    } catch (err: any) {
+      console.error('Error starting video session:', err);
+      setError(err.message || 'Failed to start video session');
+    } finally {
+      setVideoLoading(false);
     }
   };
 
@@ -155,7 +174,7 @@ const TeacherDetailPage: React.FC = () => {
           </Grid>
           
           {user && user.userType === UserType.STUDENT && (
-            <Grid item xs={12} md={4} sx={{ display: 'flex', justifyContent: { xs: 'flex-start', md: 'flex-end' } }}>
+            <Grid item xs={12} md={4} sx={{ display: 'flex', justifyContent: { xs: 'flex-start', md: 'flex-end' }, flexWrap: 'wrap', gap: 2 }}>
               <Button
                 variant={isFavorite ? "outlined" : "contained"}
                 color="primary"
@@ -164,6 +183,16 @@ const TeacherDetailPage: React.FC = () => {
                 disabled={favoriteLoading}
               >
                 {isFavorite ? 'Favorilerden Çıkar' : 'Favorilere Ekle'}
+              </Button>
+              
+              <Button
+                variant="contained"
+                color="secondary"
+                startIcon={<VideocamIcon />}
+                onClick={handleStartVideoSession}
+                disabled={videoLoading}
+              >
+                {videoLoading ? 'İşleniyor...' : 'Video Görüşmesi Başlat'}
               </Button>
             </Grid>
           )}

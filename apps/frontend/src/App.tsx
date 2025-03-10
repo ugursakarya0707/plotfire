@@ -21,6 +21,7 @@ import NotFoundPage from './pages/NotFoundPage';
 import TeacherListPage from './pages/teachers/TeacherListPage';
 import TeacherDetailPage from './pages/teachers/TeacherDetailPage';
 import FavoriteTeachersPage from './pages/teachers/FavoriteTeachersPage';
+import VideoConferencePage from './pages/video-conference/VideoConferencePage';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ element: React.ReactElement }> = ({ element }) => {
@@ -95,6 +96,11 @@ const App: React.FC = () => {
         <Route 
           path="/favorite-teachers" 
           element={<ProtectedRoute element={<FavoriteTeachersPage />} />} 
+        />
+        {/* Video Conference Route */}
+        <Route 
+          path="/video-conference/:sessionId" 
+          element={<ProtectedRoute element={<VideoConferencePage />} />} 
         />
       </Route>
 
