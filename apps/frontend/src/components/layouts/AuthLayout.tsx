@@ -1,7 +1,7 @@
 import React from 'react';
 import { Outlet, Navigate } from 'react-router-dom';
 import { Box, Container, Paper, Typography } from '@mui/material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 const AuthLayout: React.FC = () => {
   const { isAuthenticated } = useAuth();

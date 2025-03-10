@@ -1,15 +1,13 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, UseGuards, Request, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Put, Delete, Request, NotFoundException, BadRequestException } from '@nestjs/common';
 import { TeacherConferenceService } from '../services/teacher-conference.service';
 import { CreateTeacherConferenceDto } from '../dto/create-teacher-conference.dto';
 import { TeacherConference } from '../schemas/teacher-conference.schema';
-import { JwtAuthGuard } from '../guards/jwt-auth.guard';
 
 @Controller('teacher-conferences')
 export class TeacherConferenceController {
   constructor(private readonly teacherConferenceService: TeacherConferenceService) {}
 
   @Post()
-  @UseGuards(JwtAuthGuard)
   async create(@Body() createTeacherConferenceDto: CreateTeacherConferenceDto): Promise<TeacherConference> {
     try {
       return await this.teacherConferenceService.create(createTeacherConferenceDto);
@@ -60,7 +58,6 @@ export class TeacherConferenceController {
   }
 
   @Put(':id')
-  @UseGuards(JwtAuthGuard)
   async update(
     @Param('id') id: string,
     @Body() updateTeacherConferenceDto: Partial<CreateTeacherConferenceDto>,
@@ -80,7 +77,6 @@ export class TeacherConferenceController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
   async remove(@Param('id') id: string): Promise<void> {
     try {
       await this.teacherConferenceService.remove(id);

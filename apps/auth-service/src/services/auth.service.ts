@@ -1,13 +1,16 @@
-import { Injectable, UnauthorizedException, ConflictException, NotFoundException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, NotFoundException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UserRepository } from '../repositories/user.repository';
-import { CreateUserDto, LoginDto, AuthResponse, UserDto } from '@postply/models';
+import { CreateUserDto, LoginDto, AuthResponse, UserDto, UserType } from '@postply/models';
+import { ConfigService } from '@nestjs/config';
+import fetch from 'node-fetch';
 
 @Injectable()
 export class AuthService {
   constructor(
     private readonly userRepository: UserRepository,
     private readonly jwtService: JwtService,
+    private readonly configService: ConfigService,
   ) {}
 
   async register(createUserDto: CreateUserDto): Promise<AuthResponse> {
@@ -20,6 +23,41 @@ export class AuthService {
     const user = await this.userRepository.create(createUserDto);
     const userDto = this.userRepository.mapToDto(user);
     const token = this.generateToken(userDto);
+    
+    // Öğretmen kaydı ise teacher-conference-service'e HTTP isteği gönder
+    if (userDto.userType === UserType.TEACHER) {
+      try {
+        const teacherConferenceApiUrl = this.configService.get<string>('TEACHER_CONFERENCE_API_URL') || 'http://localhost:3006/api';
+        
+        // Basit isim oluştur
+        const firstName = 'Öğretmen';
+        const lastName = userDto.id.substring(0, 5);
+        
+        // Teacher conference kaydı oluştur
+        const response = await fetch(`${teacherConferenceApiUrl}/teacher-conferences`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+          },
+          body: JSON.stringify({
+            teacherId: userDto.id,
+            firstName,
+            lastName,
+            hobbies: [],
+            isActive: true
+          })
+        });
+
+        if (!response.ok) {
+          Logger.warn(`Öğretmen konferans kaydı oluşturulamadı: ${await response.text()}`);
+        } else {
+          Logger.log(`Öğretmen konferans kaydı başarıyla oluşturuldu: ${userDto.id}`);
+        }
+      } catch (error) {
+        Logger.error(`Öğretmen konferans kaydı oluşturulurken hata: ${error instanceof Error ? error.message : 'Bilinmeyen hata'}`);
+      }
+    }
     
     return {
       user: userDto,

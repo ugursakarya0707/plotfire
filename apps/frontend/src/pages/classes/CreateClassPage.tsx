@@ -14,7 +14,7 @@ import {
   Alert,
 } from '@mui/material';
 import { Add as AddIcon, Close as CloseIcon } from '@mui/icons-material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { createClass } from '../../services/classService';
 import { UserType } from '../../types/user';
 

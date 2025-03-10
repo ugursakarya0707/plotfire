@@ -23,7 +23,7 @@ import {
   QuestionAnswer as QAIcon,
   School as SchoolIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getClasses, getClassesByTeacherId, getEnrollmentsByStudentId } from '../../services/classService';
 import { Class, Enrollment } from '../../types/class';

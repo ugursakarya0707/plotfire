@@ -15,7 +15,7 @@ import {
   QuestionAnswer as QAIcon,
   Person as PersonIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../contexts/AuthContext';
 
 const HomePage: React.FC = () => {
   const { isAuthenticated, user } = useAuth();

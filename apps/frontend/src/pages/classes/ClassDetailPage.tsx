@@ -30,7 +30,7 @@ import {
   Edit as EditIcon,
   Delete as DeleteIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getClassById, enrollInClass, deleteClass, getEnrollmentsByClassId } from '../../services/classService';
 import { Class, Enrollment } from '../../types/class';

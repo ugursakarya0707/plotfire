@@ -30,7 +30,7 @@ import {
   Add as AddIcon,
   Delete as DeleteIcon,
 } from '@mui/icons-material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getProfile, updateProfile } from '../../services/profileService';
 import { Profile as ProfileType, ProfileUpdateDto } from '../../types/profile';

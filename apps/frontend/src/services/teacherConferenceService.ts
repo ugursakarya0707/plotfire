@@ -1,7 +1,6 @@
-import axios from 'axios';
 import { getAuthHeader } from './authService';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3006/api';
+const API_URL = process.env['REACT_APP_TEACHER_CONFERENCE_API_URL'] || 'http://localhost:3006/api';
 
 export interface TeacherConference {
   _id: string;
@@ -26,84 +25,115 @@ export interface FavoriteTeacher {
 // Get all teacher conferences
 export const getAllTeacherConferences = async (): Promise<TeacherConference[]> => {
   try {
-    const response = await axios.get<TeacherConference[]>(`${API_URL}/teacher-conferences`);
-    return response.data;
+    const response = await fetch(`${API_URL}/teacher-conferences`, {
+      headers: { ...(getAuthHeader() as Record<string, string>) },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
   } catch (error: any) {
     console.error('Error fetching teacher conferences:', error);
-    throw new Error(error.response?.data?.message || 'Failed to fetch teacher conferences');
+    throw new Error(error.message || 'Failed to fetch teacher conferences');
   }
 };
 
 // Get teacher conference by ID
 export const getTeacherConferenceById = async (id: string): Promise<TeacherConference> => {
   try {
-    const response = await axios.get<TeacherConference>(`${API_URL}/teacher-conferences/${id}`);
-    return response.data;
+    const response = await fetch(`${API_URL}/teacher-conferences/${id}`, {
+      headers: { ...(getAuthHeader() as Record<string, string>) },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
   } catch (error: any) {
     console.error('Error fetching teacher conference:', error);
-    throw new Error(error.response?.data?.message || 'Failed to fetch teacher conference');
+    throw new Error(error.message || 'Failed to fetch teacher conference');
   }
 };
 
 // Get teacher conference by teacher ID
 export const getTeacherConferenceByTeacherId = async (teacherId: string): Promise<TeacherConference> => {
   try {
-    const response = await axios.get<TeacherConference>(`${API_URL}/teacher-conferences/teacher/${teacherId}`);
-    return response.data;
+    const response = await fetch(`${API_URL}/teacher-conferences/teacher/${teacherId}`, {
+      headers: { ...(getAuthHeader() as Record<string, string>) },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
   } catch (error: any) {
     console.error('Error fetching teacher conference by teacher ID:', error);
-    throw new Error(error.response?.data?.message || 'Failed to fetch teacher conference');
+    throw new Error(error.message || 'Failed to fetch teacher conference');
   }
 };
 
 // Add teacher to favorites
 export const addTeacherToFavorites = async (teacherId: string): Promise<FavoriteTeacher> => {
   try {
-    const response = await axios.post<FavoriteTeacher>(
-      `${API_URL}/favorite-teachers`,
-      { teacherId },
-      { headers: getAuthHeader() }
-    );
-    return response.data;
+    const response = await fetch(`${API_URL}/favorite-teachers`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getAuthHeader() as Record<string, string>)
+      },
+      body: JSON.stringify({ teacherId }),
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
   } catch (error: any) {
     console.error('Error adding teacher to favorites:', error);
-    throw new Error(error.response?.data?.message || 'Failed to add teacher to favorites');
+    throw new Error(error.message || 'Failed to add teacher to favorites');
   }
 };
 
 // Remove teacher from favorites
 export const removeTeacherFromFavorites = async (teacherId: string): Promise<void> => {
   try {
-    await axios.delete(`${API_URL}/favorite-teachers/${teacherId}`, {
-      headers: getAuthHeader(),
+    const response = await fetch(`${API_URL}/favorite-teachers/${teacherId}`, {
+      method: 'DELETE',
+      headers: { ...(getAuthHeader() as Record<string, string>) },
     });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
   } catch (error: any) {
     console.error('Error removing teacher from favorites:', error);
-    throw new Error(error.response?.data?.message || 'Failed to remove teacher from favorites');
+    throw new Error(error.message || 'Failed to remove teacher from favorites');
   }
 };
 
 // Get favorite teachers
 export const getFavoriteTeachers = async (): Promise<FavoriteTeacher[]> => {
   try {
-    const response = await axios.get<FavoriteTeacher[]>(`${API_URL}/favorite-teachers`, {
-      headers: getAuthHeader(),
+    const response = await fetch(`${API_URL}/favorite-teachers`, {
+      headers: { ...(getAuthHeader() as Record<string, string>) },
     });
-    return response.data;
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
   } catch (error: any) {
     console.error('Error fetching favorite teachers:', error);
-    throw new Error(error.response?.data?.message || 'Failed to fetch favorite teachers');
+    throw new Error(error.message || 'Failed to fetch favorite teachers');
   }
 };
 
 // Check if teacher is favorite
 export const isTeacherFavorite = async (teacherId: string): Promise<boolean> => {
   try {
-    const response = await axios.get<{ isFavorite: boolean }>(
-      `${API_URL}/favorite-teachers/check/${teacherId}`,
-      { headers: getAuthHeader() }
-    );
-    return response.data.isFavorite;
+    const response = await fetch(`${API_URL}/favorite-teachers/check/${teacherId}`, {
+      headers: { ...(getAuthHeader() as Record<string, string>) },
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const data = await response.json();
+    return data.isFavorite;
   } catch (error: any) {
     console.error('Error checking if teacher is favorite:', error);
     return false;

@@ -20,11 +20,13 @@ export interface User {
 // Auth context arayüzü
 interface AuthContextType {
   user: User | null;
-  loading: boolean;
+  isLoading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
+  register: (username: string, email: string, password: string, userType: UserType) => Promise<void>;
   logout: () => void;
-  isAuthenticated: () => boolean;
+  isAuthenticated: boolean;
+  clearError: () => void;
 }
 
 // Auth context'i oluşturma
@@ -38,7 +40,7 @@ interface AuthProviderProps {
 // Auth provider bileşeni
 export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
   // Sayfa yüklendiğinde local storage'dan kullanıcı bilgilerini alma
@@ -58,7 +60,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
       } catch (err) {
         console.error('Error initializing auth:', err);
       } finally {
-        setLoading(false);
+        setIsLoading(false);
       }
     };
 
@@ -68,31 +70,68 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   // Login fonksiyonu
   const login = async (email: string, password: string) => {
     try {
-      setLoading(true);
+      setIsLoading(true);
       setError(null);
       
       // API'ye login isteği gönderme
-      const response = await axios.post(`${process.env.REACT_APP_API_URL || 'http://localhost:3000/api'}/auth/login`, {
+      const response = await axios.post('http://localhost:3001/api/auth/login', {
         email,
         password,
       });
       
-      const userData: User = response.data;
+      // AuthResponse formatında yanıt alınıyor
+      const { user, token } = response.data;
       
       // Kullanıcı bilgilerini state'e ve local storage'a kaydetme
-      setUser(userData);
-      localStorage.setItem('user', JSON.stringify(userData));
+      setUser(user);
+      localStorage.setItem('user', JSON.stringify(user));
       
-      // Token'ı axios default headers'a ekle
-      if (userData.token) {
-        axios.defaults.headers.common['Authorization'] = `Bearer ${userData.token}`;
+      // Token'ı axios default headers'a ekle ve localStorage'a kaydet
+      if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        localStorage.setItem('token', token);
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.message || 'Login failed. Please try again.';
       setError(errorMessage);
       throw new Error(errorMessage);
     } finally {
-      setLoading(false);
+      setIsLoading(false);
+    }
+  };
+
+  // Register fonksiyonu
+  const register = async (username: string, email: string, password: string, userType: UserType) => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      
+      // API'ye register isteği gönderme
+      const response = await axios.post('http://localhost:3001/api/auth/register', {
+        username,
+        email,
+        password,
+        userType,
+      });
+      
+      // AuthResponse formatında yanıt alınıyor
+      const { user, token } = response.data;
+      
+      // Kullanıcı bilgilerini state'e ve local storage'a kaydetme
+      setUser(user);
+      localStorage.setItem('user', JSON.stringify(user));
+      
+      // Token'ı axios default headers'a ekle ve localStorage'a kaydet
+      if (token) {
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        localStorage.setItem('token', token);
+      }
+    } catch (err: any) {
+      const errorMessage = err.response?.data?.message || 'Register failed. Please try again.';
+      setError(errorMessage);
+      throw new Error(errorMessage);
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -103,19 +142,24 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     delete axios.defaults.headers.common['Authorization'];
   };
 
-  // Kullanıcının authenticate olup olmadığını kontrol etme
-  const isAuthenticated = () => {
-    return !!user;
+  // Error'u temizleme
+  const clearError = () => {
+    setError(null);
   };
+
+  // Kullanıcının authenticate olup olmadığını kontrol etme
+  const isAuthenticated = !!user;
 
   // Context value
   const value = {
     user,
-    loading,
+    isLoading,
     error,
     login,
+    register,
     logout,
     isAuthenticated,
+    clearError,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

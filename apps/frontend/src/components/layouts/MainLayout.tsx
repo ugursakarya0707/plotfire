@@ -28,7 +28,7 @@ import {
   Person as PersonIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 
 const drawerWidth = 240;
@@ -167,7 +167,7 @@ const MainLayout: React.FC = () => {
                 color="inherit"
               >
                 <Avatar sx={{ width: 32, height: 32 }}>
-                  {user.email.charAt(0).toUpperCase()}
+                  {user.email && user.email.charAt(0).toUpperCase()}
                 </Avatar>
               </IconButton>
               <Menu

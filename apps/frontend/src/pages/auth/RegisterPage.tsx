@@ -16,10 +16,11 @@ import {
 } from '@mui/material';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 
 const validationSchema = Yup.object({
+  username: Yup.string().required('Username is required'),
   email: Yup.string()
     .email('Enter a valid email')
     .required('Email is required'),
@@ -53,6 +54,7 @@ const RegisterPage: React.FC = () => {
 
   const formik = useFormik({
     initialValues: {
+      username: '',
       email: '',
       password: '',
       confirmPassword: '',
@@ -63,7 +65,7 @@ const RegisterPage: React.FC = () => {
       setIsSubmitting(true);
       setError(null);
       try {
-        await register(values.email, values.password, values.userType as UserType);
+        await register(values.username, values.email, values.password, values.userType as UserType);
       } catch (err: any) {
         setError(err.message || 'Failed to register');
       } finally {
@@ -89,11 +91,25 @@ const RegisterPage: React.FC = () => {
           margin="normal"
           required
           fullWidth
+          id="username"
+          label="Username"
+          name="username"
+          autoComplete="username"
+          autoFocus
+          value={formik.values.username}
+          onChange={formik.handleChange}
+          onBlur={formik.handleBlur}
+          error={formik.touched.username && Boolean(formik.errors.username)}
+          helperText={formik.touched.username && formik.errors.username}
+        />
+        <TextField
+          margin="normal"
+          required
+          fullWidth
           id="email"
           label="Email Address"
           name="email"
           autoComplete="email"
-          autoFocus
           value={formik.values.email}
           onChange={formik.handleChange}
           onBlur={formik.handleBlur}

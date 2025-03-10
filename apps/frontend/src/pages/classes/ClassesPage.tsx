@@ -18,7 +18,7 @@ import {
   Alert,
 } from '@mui/material';
 import { Search as SearchIcon, Add as AddIcon } from '@mui/icons-material';
-import { useAuth } from '../../context/AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getClasses, enrollInClass } from '../../services/classService';
 import { Class } from '../../types/class';
