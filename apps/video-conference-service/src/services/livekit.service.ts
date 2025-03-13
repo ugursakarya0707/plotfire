@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AccessToken, RoomServiceClient, Room } from 'livekit-server-sdk';
 import { v4 as uuidv4 } from 'uuid';
+import * as jwt from 'jsonwebtoken';
 
 @Injectable()
 export class LiveKitService {
@@ -50,25 +51,32 @@ export class LiveKitService {
    */
   generateToken(roomName: string, participantName: string, participantId: string, isTeacher: boolean): string {
     try {
-      // AccessToken yapıcısı sadece 2 parametre alıyor (apiKey ve apiSecret)
-      const token = new AccessToken(this.apiKey, this.apiSecret);
-      
-      // Odaya katılma izni
-      token.addGrant({
-        roomJoin: true,
-        room: roomName,
-        canPublish: true,
-        canSubscribe: true,
-        canPublishData: true,
-        // Kimlik bilgilerini grant içinde belirtelim
-        identity: participantId,
+      // Kimlik bilgisini içeren bir JWT token oluştur
+      const tokenData = {
+        video: {
+          room: roomName,
+          canPublish: true,
+          canSubscribe: true,
+          canPublishData: true
+        },
+        iss: 'postply',
+        sub: participantId,
         name: participantName,
-      });
+        iat: Math.floor(Date.now() / 1000),
+        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 // 24 saat
+      };
       
-      return token.toJwt();
+      // JWT token oluştur
+      const token = jwt.sign(
+        tokenData,
+        this.apiSecret,
+        { algorithm: 'HS256' }
+      );
+      
+      return token;
     } catch (error) {
-      console.error('Error generating LiveKit token:', error);
-      throw new Error(`Failed to generate LiveKit token: ${error.message}`);
+      console.error('Error generating token:', error);
+      throw new Error(`Failed to generate token: ${error.message}`);
     }
   }
 

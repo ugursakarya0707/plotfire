@@ -117,12 +117,20 @@ services:
     image: mongo:5.0
     ports:
       - "27017:27017"
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: mongodb
-      MONGO_INITDB_ROOT_PASSWORD: mongodb
-      MONGO_INITDB_DATABASE: teacher_conference_db
     volumes:
       - teacher_conference_db_data:/data/db
+    restart: unless-stopped
+    networks:
+      - postply-network
+
+  # Video Conference Service Database
+  video-conference-db:
+    container_name: postply-video-conference-db
+    image: mongo:5.0
+    ports:
+      - "27018:27017"
+    volumes:
+      - video_conference_db_data:/data/db
     restart: unless-stopped
     networks:
       - postply-network
@@ -147,4 +155,6 @@ volumes:
   profile_db_data:
     driver: local
   teacher_conference_db_data:
+    driver: local
+  video_conference_db_data:
     driver: local
