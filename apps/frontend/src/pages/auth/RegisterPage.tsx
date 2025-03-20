@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link as RouterLink } from 'react-router-dom';
+import { Link as RouterLink, useNavigate } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -13,6 +13,7 @@ import {
   RadioGroup,
   FormControlLabel,
   Radio,
+  Snackbar,
 } from '@mui/material';
 import { useFormik } from 'formik';
 import * as Yup from 'yup';
@@ -21,6 +22,8 @@ import { UserType } from '../../types/user';
 
 const validationSchema = Yup.object({
   username: Yup.string().required('Username is required'),
+  firstName: Yup.string().required('First name is required'),
+  lastName: Yup.string().required('Last name is required'),
   email: Yup.string()
     .email('Enter a valid email')
     .required('Email is required'),
@@ -37,6 +40,8 @@ const RegisterPage: React.FC = () => {
   const { register, error: authError, clearError } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const navigate = useNavigate();
 
   // Sync authError with local error state
   useEffect(() => {
@@ -55,6 +60,8 @@ const RegisterPage: React.FC = () => {
   const formik = useFormik({
     initialValues: {
       username: '',
+      firstName: '',
+      lastName: '',
       email: '',
       password: '',
       confirmPassword: '',
@@ -65,7 +72,34 @@ const RegisterPage: React.FC = () => {
       setIsSubmitting(true);
       setError(null);
       try {
-        await register(values.username, values.email, values.password, values.userType as UserType);
+        await register(
+          values.username, 
+          values.email, 
+          values.password, 
+          values.userType as UserType, 
+          values.firstName, 
+          values.lastName
+        );
+        
+        // Kayıt başarılı olduğunda
+        if (values.userType === UserType.TEACHER) {
+          setSuccessMessage('Kayıt başarılı! Öğretmen profilinizi tamamlamak için yönlendiriliyorsunuz...');
+          // Kısa bir gecikme ile profil sayfasına yönlendir
+          setTimeout(() => {
+            navigate('/profile', { 
+              state: { 
+                isNewTeacher: true, 
+                message: 'Lütfen ders bilgilerinizi ve müsait zaman dilimlerinizi ekleyin.' 
+              } 
+            });
+          }, 1500);
+        } else {
+          setSuccessMessage('Kayıt başarılı! Ana sayfaya yönlendiriliyorsunuz...');
+          // Kısa bir gecikme ile ana sayfaya yönlendir
+          setTimeout(() => {
+            navigate('/');
+          }, 1500);
+        }
       } catch (err: any) {
         setError(err.message || 'Failed to register');
       } finally {
@@ -86,6 +120,13 @@ const RegisterPage: React.FC = () => {
         </Alert>
       )}
       
+      <Snackbar
+        open={!!successMessage}
+        autoHideDuration={3000}
+        message={successMessage}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      />
+      
       <Box component="form" onSubmit={formik.handleSubmit} noValidate>
         <TextField
           margin="normal"
@@ -101,6 +142,34 @@ const RegisterPage: React.FC = () => {
           onBlur={formik.handleBlur}
           error={formik.touched.username && Boolean(formik.errors.username)}
           helperText={formik.touched.username && formik.errors.username}
+        />
+        <TextField
+          margin="normal"
+          required
+          fullWidth
+          id="firstName"
+          label="First Name"
+          name="firstName"
+          autoComplete="given-name"
+          value={formik.values.firstName}
+          onChange={formik.handleChange}
+          onBlur={formik.handleBlur}
+          error={formik.touched.firstName && Boolean(formik.errors.firstName)}
+          helperText={formik.touched.firstName && formik.errors.firstName}
+        />
+        <TextField
+          margin="normal"
+          required
+          fullWidth
+          id="lastName"
+          label="Last Name"
+          name="lastName"
+          autoComplete="family-name"
+          value={formik.values.lastName}
+          onChange={formik.handleChange}
+          onBlur={formik.handleBlur}
+          error={formik.touched.lastName && Boolean(formik.errors.lastName)}
+          helperText={formik.touched.lastName && formik.errors.lastName}
         />
         <TextField
           margin="normal"

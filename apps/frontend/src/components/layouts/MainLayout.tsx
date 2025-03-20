@@ -26,6 +26,10 @@ import {
   Class as ClassIcon,
   QuestionAnswer as QAIcon,
   Person as PersonIcon,
+  EventAvailable as ReservationIcon,
+  School as TeacherIcon,
+  Favorite as FavoriteIcon,
+  Payment as PaymentIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
@@ -97,7 +101,26 @@ const MainLayout: React.FC = () => {
       icon: <QAIcon />,
       path: '/qa',
     },
+    {
+      text: 'Öğretmenler',
+      icon: <TeacherIcon />,
+      path: '/teachers',
+    },
   ];
+
+  // Add student-specific menu items
+  if (user?.userType === UserType.STUDENT) {
+    menuItems.push({
+      text: 'Favori Öğretmenlerim',
+      icon: <FavoriteIcon />,
+      path: '/favorite-teachers',
+    });
+    menuItems.push({
+      text: 'Ödeme Geçmişim',
+      icon: <PaymentIcon />,
+      path: '/payment-history',
+    });
+  }
 
   // Add teacher-specific menu items
   if (user?.userType === UserType.TEACHER) {
@@ -105,6 +128,11 @@ const MainLayout: React.FC = () => {
       text: 'My Students',
       icon: <PersonIcon />,
       path: '/students',
+    });
+    menuItems.push({
+      text: 'Rezervasyonlarım',
+      icon: <ReservationIcon />,
+      path: '/teacher-reservations',
     });
   }
 

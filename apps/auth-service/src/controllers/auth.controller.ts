@@ -1,7 +1,8 @@
-import { Controller, Post, Body, Get, UseGuards, Req, HttpCode, HttpStatus } from '@nestjs/common';
+import { Controller, Post, Body, Get, UseGuards, Req, HttpCode, HttpStatus, Param, NotFoundException } from '@nestjs/common';
 import { AuthService } from '../services/auth.service';
 import { CreateUserDto, LoginDto, AuthResponse, UserDto } from '@postply/models';
 import { JwtAuthGuard } from '../guards/jwt-auth.guard';
+import { Public } from '../decorators/public.decorator';
 
 @Controller('auth')
 export class AuthController {
@@ -28,5 +29,15 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async getUser(@Req() req): Promise<UserDto> {
     return req.user;
+  }
+
+  @Public()
+  @Get('user/:id')
+  async getUserById(@Param('id') id: string): Promise<UserDto> {
+    const user = await this.authService.getUserById(id);
+    if (!user) {
+      throw new NotFoundException(`User with ID ${id} not found`);
+    }
+    return user;
   }
 }

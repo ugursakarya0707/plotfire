@@ -28,6 +28,9 @@ export class UserDto {
   id: string;
   email: string;
   userType: UserType;
+  firstName?: string;
+  lastName?: string;
+  username?: string;
 }
 
 export class CreateUserDto {
@@ -46,6 +49,12 @@ export class CreateUserDto {
   
   @IsEnum(UserType)
   userType: UserType;
+  
+  @IsString()
+  firstName?: string;
+  
+  @IsString()
+  lastName?: string;
 }
 
 export class LoginDto {

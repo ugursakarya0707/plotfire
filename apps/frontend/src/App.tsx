@@ -8,7 +8,6 @@ import MainLayout from './components/layouts/MainLayout';
 import AuthLayout from './components/layouts/AuthLayout';
 
 // Pages
-import HomePage from './pages/HomePage';
 import LoginPage from './pages/auth/LoginPage';
 import RegisterPage from './pages/auth/RegisterPage';
 import DashboardPage from './pages/dashboard/DashboardPage';
@@ -22,6 +21,8 @@ import TeacherListPage from './pages/teachers/TeacherListPage';
 import TeacherDetailPage from './pages/teachers/TeacherDetailPage';
 import FavoriteTeachersPage from './pages/teachers/FavoriteTeachersPage';
 import VideoConferencePage from './pages/video-conference/VideoConferencePage';
+import TeacherReservationsPage from './pages/TeacherReservationsPage';
+import PaymentHistoryPage from './pages/payments/PaymentHistoryPage';
 
 // Protected route component
 const ProtectedRoute: React.FC<{ element: React.ReactElement }> = ({ element }) => {
@@ -96,6 +97,15 @@ const App: React.FC = () => {
         <Route 
           path="/favorite-teachers" 
           element={<ProtectedRoute element={<FavoriteTeachersPage />} />} 
+        />
+        <Route 
+          path="/teacher-reservations" 
+          element={<ProtectedRoute element={<TeacherReservationsPage />} />} 
+        />
+        {/* Payment Routes */}
+        <Route 
+          path="/payment-history" 
+          element={<ProtectedRoute element={<PaymentHistoryPage />} />} 
         />
         {/* Video Conference Route */}
         <Route 

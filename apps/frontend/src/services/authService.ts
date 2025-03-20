@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { User, UserType, AuthResponse, LoginRequest, RegisterRequest } from '../types/user';
+import { User, UserType, AuthResponse } from '../types/user';
 
 // Use environment variable with fallback
 const API_URL = process.env['REACT_APP_API_URL'] || 'http://localhost:3000/api';
@@ -39,6 +39,27 @@ api.interceptors.response.use(
 
 export const getAuthHeader = () => {
   const token = localStorage.getItem('token');
+  console.log('Token from localStorage:', token);
+  
+  // Eğer token localStorage'da doğrudan yoksa, user nesnesinden almayı dene
+  if (!token) {
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+      try {
+        const user = JSON.parse(userStr);
+        if (user.token) {
+          console.log('Token found in user object');
+          return {
+            Authorization: `Bearer ${user.token}`,
+            'Content-Type': 'application/json',
+          };
+        }
+      } catch (e) {
+        console.error('Error parsing user from localStorage:', e);
+      }
+    }
+  }
+  
   return {
     Authorization: token ? `Bearer ${token}` : '',
     'Content-Type': 'application/json',

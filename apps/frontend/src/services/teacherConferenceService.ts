@@ -11,6 +11,13 @@ export interface TeacherConference {
   name?: string; 
   hobbies: string[];
   isActive: boolean;
+  isOnline: boolean;
+  subject?: string;
+  hourlyRate?: number;
+  rating?: number;
+  ratingCount?: number;
+  photoUrl?: string;
+  bio?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -154,5 +161,60 @@ export const isTeacherFavorite = async (teacherId: string): Promise<boolean> => 
   } catch (error: any) {
     console.error('Error checking if teacher is favorite:', error);
     return false;
+  }
+};
+
+// Update teacher's online status
+export const updateTeacherOnlineStatus = async (isOnline: boolean): Promise<TeacherConference> => {
+  try {
+    console.log('Updating teacher online status:', isOnline);
+    
+    // User bilgisini localStorage'dan al
+    const userStr = localStorage.getItem('user');
+    if (!userStr) {
+      throw new Error('User not found in localStorage');
+    }
+    
+    const user = JSON.parse(userStr);
+    const token = user.token || localStorage.getItem('token');
+    
+    if (!token) {
+      throw new Error('Authentication token not found');
+    }
+    
+    console.log('Using token:', token.substring(0, 20) + '...');
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    };
+    
+    console.log('Request headers:', headers);
+    
+    // TeacherId parametresini URL'de kullanmıyoruz, backend kullanıcının JWT token'ından ID'sini alacak
+    const response = await fetch(`${API_URL}/teacher-conferences/teacher/me/online-status`, {
+      method: 'PUT',
+      headers,
+      body: JSON.stringify({ isOnline }),
+    });
+    
+    console.log('Response status:', response.status);
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('Error response data:', errorData);
+      throw new Error(`Failed to update online status: ${errorData.message || `HTTP error! status: ${response.status}`}`);
+    }
+    
+    const data = await response.json();
+    console.log('Success response data:', data);
+    return {
+      ...data,
+      id: data._id,
+      name: `${data.firstName} ${data.lastName}`
+    };
+  } catch (error: any) {
+    console.error('Error updating teacher online status:', error);
+    throw error;
   }
 };

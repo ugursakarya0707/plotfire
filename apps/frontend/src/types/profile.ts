@@ -14,6 +14,11 @@ export interface Profile {
   interests: string[];
   skills: string[];
   education: string[];
+  subject?: string;
+  hourlyRate?: number;
+  rating?: number;
+  ratingCount?: number;
+  photoUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,4 +35,9 @@ export interface ProfileUpdateDto {
   interests?: string[];
   skills?: string[];
   education?: string[];
+  subject?: string;
+  hourlyRate?: number;
+  rating?: number;
+  ratingCount?: number;
+  photoUrl?: string;
 }

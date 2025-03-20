@@ -15,6 +15,8 @@ export interface User {
   email: string;
   userType: UserType;
   token?: string;
+  firstName?: string;
+  lastName?: string;
 }
 
 // Auth context arayüzü
@@ -23,7 +25,7 @@ interface AuthContextType {
   isLoading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
-  register: (username: string, email: string, password: string, userType: UserType) => Promise<void>;
+  register: (username: string, email: string, password: string, userType: UserType, firstName?: string, lastName?: string) => Promise<void>;
   logout: () => void;
   isAuthenticated: boolean;
   clearError: () => void;
@@ -101,7 +103,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   };
 
   // Register fonksiyonu
-  const register = async (username: string, email: string, password: string, userType: UserType) => {
+  const register = async (username: string, email: string, password: string, userType: UserType, firstName?: string, lastName?: string) => {
     try {
       setIsLoading(true);
       setError(null);
@@ -112,6 +114,8 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
         email,
         password,
         userType,
+        firstName,
+        lastName
       });
       
       // AuthResponse formatında yanıt alınıyor
@@ -176,10 +180,18 @@ export const useAuth = () => {
 
 // Auth service
 export const getAuthHeader = () => {
+  const token = localStorage.getItem('token');
+  console.log('Token from AuthContext:', token);
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  
+  // Eski yöntem (geriye uyumluluk için)
   const user = localStorage.getItem('user');
   if (user) {
     const parsedUser = JSON.parse(user);
     if (parsedUser.token) {
+      console.log('Token from user object:', parsedUser.token);
       return { Authorization: `Bearer ${parsedUser.token}` };
     }
   }

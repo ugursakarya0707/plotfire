@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLocation } from 'react-router-dom';
 import {
   Box,
   Container,
@@ -21,6 +22,8 @@ import {
   Alert,
   IconButton,
   InputAdornment,
+  Rating,
+  Snackbar,
 } from '@mui/material';
 import {
   Person as PersonIcon,
@@ -28,12 +31,15 @@ import {
   Save as SaveIcon,
   Cancel as CancelIcon,
   Add as AddIcon,
-  Delete as DeleteIcon,
+  School as SchoolIcon,
+  AttachMoney as AttachMoneyIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { getProfile, updateProfile } from '../../services/profileService';
 import { Profile as ProfileType, ProfileUpdateDto } from '../../types/profile';
+import TeacherCalendar, { TimeSlot } from '../../components/calendar/TeacherCalendar';
+import { getTeacherTimeSlots } from '../../services/teacherCalendarService';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -59,11 +65,24 @@ function TabPanel(props: TabPanelProps) {
 
 const ProfilePage: React.FC = () => {
   const { user } = useAuth();
-  const [tabValue, setTabValue] = useState(0);
-  const [isEditing, setIsEditing] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const location = useLocation();
+  const isNewTeacher = location.state?.isNewTeacher || false;
+  const welcomeMessage = location.state?.message || '';
+  
   const [profile, setProfile] = useState<ProfileType | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [tabValue, setTabValue] = useState<number>(isNewTeacher ? 1 : 0); 
+  const [newInterest, setNewInterest] = useState<string>('');
+  const [newSkill, setNewSkill] = useState<string>('');
+  const [newEducation, setNewEducation] = useState<string>('');
+  const [showWelcomeMessage, setShowWelcomeMessage] = useState<boolean>(isNewTeacher);
+  const [timeSlots, setTimeSlots] = useState<any[]>([]);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [calendarLoading, setCalendarLoading] = useState<boolean>(false);
+  const [paymentModalOpen, setPaymentModalOpen] = useState<boolean>(false);
+
   const [formValues, setFormValues] = useState<ProfileUpdateDto>({
     firstName: '',
     lastName: '',
@@ -74,15 +93,15 @@ const ProfilePage: React.FC = () => {
     interests: [],
     skills: [],
     education: [],
+    subject: '',
+    hourlyRate: 0,
+    photoUrl: '',
   });
-  
-  // For adding new items to arrays
-  const [newInterest, setNewInterest] = useState('');
-  const [newSkill, setNewSkill] = useState('');
-  const [newEducation, setNewEducation] = useState('');
-  
+
   useEffect(() => {
     const fetchProfile = async () => {
+      if (!user) return;
+      
       try {
         setLoading(true);
         const profileData = await getProfile();
@@ -97,7 +116,16 @@ const ProfilePage: React.FC = () => {
           interests: profileData.interests || [],
           skills: profileData.skills || [],
           education: profileData.education || [],
+          subject: profileData.subject || '',
+          hourlyRate: profileData.hourlyRate || 0,
+          photoUrl: profileData.photoUrl || '',
         });
+        
+        // Eğer yeni kayıt olan bir öğretmen ise, düzenleme modunu otomatik olarak aç
+        if (isNewTeacher) {
+          setIsEditing(true);
+        }
+        
         setError(null);
       } catch (err: any) {
         setError(err.message || 'Failed to fetch profile');
@@ -107,10 +135,28 @@ const ProfilePage: React.FC = () => {
       }
     };
 
+    // Öğretmen zaman dilimlerini getir
+    const fetchTeacherTimeSlots = async () => {
+      if (!user || user.userType !== UserType.TEACHER) return;
+      
+      try {
+        setCalendarLoading(true);
+        const slots = await getTeacherTimeSlots(user.id);
+        setTimeSlots(slots);
+      } catch (err: any) {
+        console.error('Error fetching time slots:', err);
+      } finally {
+        setCalendarLoading(false);
+      }
+    };
+
     if (user) {
       fetchProfile();
+      if (user.userType === UserType.TEACHER) {
+        fetchTeacherTimeSlots();
+      }
     }
-  }, [user]);
+  }, [user, isNewTeacher]);
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
@@ -130,6 +176,9 @@ const ProfilePage: React.FC = () => {
           interests: profile.interests || [],
           skills: profile.skills || [],
           education: profile.education || [],
+          subject: profile.subject || '',
+          hourlyRate: profile.hourlyRate || 0,
+          photoUrl: profile.photoUrl || '',
         });
       }
     }
@@ -211,20 +260,41 @@ const ProfilePage: React.FC = () => {
         </Alert>
       )}
       
+      {/* Yeni öğretmen için hoş geldin mesajı */}
+      <Snackbar
+        open={showWelcomeMessage}
+        autoHideDuration={6000}
+        onClose={() => setShowWelcomeMessage(false)}
+        message={welcomeMessage || "Öğretmen profilinizi tamamlamak için lütfen ders bilgilerinizi ve müsait zaman dilimlerinizi ekleyin."}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      />
+      
       <Grid container spacing={4}>
         <Grid item xs={12} md={4}>
           <Paper sx={{ p: 3, textAlign: 'center' }}>
-            <Avatar
-              sx={{
-                width: 120,
-                height: 120,
-                mx: 'auto',
-                mb: 2,
-                bgcolor: 'primary.main',
-              }}
-            >
-              <PersonIcon sx={{ fontSize: 60 }} />
-            </Avatar>
+            {profile?.photoUrl ? (
+              <Avatar
+                src={profile.photoUrl}
+                sx={{
+                  width: 120,
+                  height: 120,
+                  mx: 'auto',
+                  mb: 2,
+                }}
+              />
+            ) : (
+              <Avatar
+                sx={{
+                  width: 120,
+                  height: 120,
+                  mx: 'auto',
+                  mb: 2,
+                  bgcolor: 'primary.main',
+                }}
+              >
+                <PersonIcon sx={{ fontSize: 60 }} />
+              </Avatar>
+            )}
             <Typography variant="h5" gutterBottom>
               {profile?.firstName || ''} {profile?.lastName || ''}
             </Typography>
@@ -234,6 +304,26 @@ const ProfilePage: React.FC = () => {
             <Typography variant="body2" color="text.secondary">
               {user?.email}
             </Typography>
+            {user?.userType === UserType.TEACHER && profile?.subject && (
+              <Typography variant="body1" sx={{ mt: 1 }}>
+                <SchoolIcon fontSize="small" sx={{ verticalAlign: 'middle', mr: 0.5 }} />
+                {profile.subject}
+              </Typography>
+            )}
+            {user?.userType === UserType.TEACHER && profile?.hourlyRate !== undefined && profile.hourlyRate > 0 && (
+              <Typography variant="body1" sx={{ mt: 1 }}>
+                <AttachMoneyIcon fontSize="small" sx={{ verticalAlign: 'middle', mr: 0.5 }} />
+                {profile.hourlyRate} TL/saat
+              </Typography>
+            )}
+            {user?.userType === UserType.TEACHER && profile?.rating !== undefined && profile.rating > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', mt: 1 }}>
+                <Rating value={profile.rating} precision={0.5} readOnly size="small" />
+                <Typography variant="body2" sx={{ ml: 1 }}>
+                  ({profile.ratingCount || 0})
+                </Typography>
+              </Box>
+            )}
             <Button
               variant="outlined"
               startIcon={isEditing ? <CancelIcon /> : <EditIcon />}
@@ -284,6 +374,7 @@ const ProfilePage: React.FC = () => {
               sx={{ borderBottom: 1, borderColor: 'divider' }}
             >
               <Tab label="Profile Information" />
+              {user?.userType === UserType.TEACHER && <Tab label="Calendar" />}
               <Tab label="Activity" />
               <Tab label="Settings" />
             </Tabs>
@@ -319,6 +410,45 @@ const ProfilePage: React.FC = () => {
                         disabled
                       />
                     </Grid>
+                    
+                    {user?.userType === UserType.TEACHER && (
+                      <>
+                        <Grid item xs={12} sm={6}>
+                          <TextField
+                            fullWidth
+                            label="Subject"
+                            name="subject"
+                            value={formValues.subject}
+                            onChange={handleInputChange}
+                            placeholder="e.g. Mathematics, Physics, English"
+                          />
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                          <TextField
+                            fullWidth
+                            label="Hourly Rate (TL)"
+                            name="hourlyRate"
+                            type="number"
+                            value={formValues.hourlyRate}
+                            onChange={handleInputChange}
+                            InputProps={{
+                              startAdornment: <InputAdornment position="start">₺</InputAdornment>,
+                            }}
+                          />
+                        </Grid>
+                        <Grid item xs={12}>
+                          <TextField
+                            fullWidth
+                            label="Profile Photo URL"
+                            name="photoUrl"
+                            value={formValues.photoUrl}
+                            onChange={handleInputChange}
+                            placeholder="https://example.com/your-photo.jpg"
+                          />
+                        </Grid>
+                      </>
+                    )}
+                    
                     <Grid item xs={12} sm={6}>
                       <TextField
                         fullWidth
@@ -511,6 +641,41 @@ const ProfilePage: React.FC = () => {
                         {user?.email || 'Not set'}
                       </Typography>
                     </Grid>
+                    
+                    {user?.userType === UserType.TEACHER && (
+                      <>
+                        <Grid item xs={12} sm={6}>
+                          <Typography variant="subtitle1">Subject</Typography>
+                          <Typography variant="body1" color="text.secondary">
+                            {profile?.subject || 'Not set'}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                          <Typography variant="subtitle1">Hourly Rate</Typography>
+                          <Typography variant="body1" color="text.secondary">
+                            {profile?.hourlyRate ? `₺${profile.hourlyRate} / hour` : 'Not set'}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={12}>
+                          <Typography variant="subtitle1">Rating</Typography>
+                          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                            {profile?.rating ? (
+                              <>
+                                <Rating value={profile.rating} precision={0.5} readOnly />
+                                <Typography variant="body2" sx={{ ml: 1 }}>
+                                  ({profile.ratingCount || 0} ratings)
+                                </Typography>
+                              </>
+                            ) : (
+                              <Typography variant="body1" color="text.secondary">
+                                No ratings yet
+                              </Typography>
+                            )}
+                          </Box>
+                        </Grid>
+                      </>
+                    )}
+                    
                     <Grid item xs={12} sm={6}>
                       <Typography variant="subtitle1">Phone Number</Typography>
                       <Typography variant="body1" color="text.secondary">
@@ -603,7 +768,27 @@ const ProfilePage: React.FC = () => {
               )}
             </TabPanel>
 
-            <TabPanel value={tabValue} index={1}>
+            {user?.userType === UserType.TEACHER && (
+              <TabPanel value={tabValue} index={1}>
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="h6" gutterBottom>
+                    Manage Your Teaching Schedule
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary" paragraph>
+                    Add available time slots for your students to book sessions with you.
+                  </Typography>
+                  
+                  <TeacherCalendar 
+                    teacherId={user.id}
+                    timeSlots={timeSlots}
+                    setTimeSlots={setTimeSlots}
+                    setIsLoading={setCalendarLoading}
+                  />
+                </Box>
+              </TabPanel>
+            )}
+
+            <TabPanel value={tabValue} index={user?.userType === UserType.TEACHER ? 2 : 1}>
               <List>
                 {recentActivity.map((activity) => (
                   <ListItem key={activity.id} divider>
@@ -616,7 +801,7 @@ const ProfilePage: React.FC = () => {
               </List>
             </TabPanel>
 
-            <TabPanel value={tabValue} index={2}>
+            <TabPanel value={tabValue} index={user?.userType === UserType.TEACHER ? 3 : 2}>
               <Typography variant="h6" gutterBottom>
                 Account Settings
               </Typography>

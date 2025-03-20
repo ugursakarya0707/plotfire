@@ -13,10 +13,15 @@ import {
   Divider,
   CircularProgress,
   Alert,
+  Rating,
+  Chip,
 } from '@mui/material';
 import {
   School as SchoolIcon,
   Person as PersonIcon,
+  AttachMoney as AttachMoneyIcon,
+  Wifi as OnlineIcon,
+  WifiOff as OfflineIcon,
 } from '@mui/icons-material';
 import { TeacherConference, getAllTeacherConferences } from '../../services/teacherConferenceService';
 
@@ -81,22 +86,95 @@ const TeacherListPage: React.FC = () => {
               <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
                 <CardContent sx={{ flexGrow: 1 }}>
                   <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
-                    <Avatar sx={{ bgcolor: 'primary.main', mr: 2 }}>
-                      <PersonIcon />
-                    </Avatar>
-                    <Typography variant="h6" component="div">
-                      {teacher.firstName} {teacher.lastName}
-                    </Typography>
-                  </Box>
-                  <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                    {teacher.hobbies && teacher.hobbies.length > 0 ? (
-                      <>
-                        <strong>Hobiler:</strong> {teacher.hobbies.join(', ')}
-                      </>
+                    {teacher.photoUrl ? (
+                      <Avatar src={teacher.photoUrl} sx={{ mr: 2 }} />
                     ) : (
-                      'Hobi bilgisi bulunmamaktadır.'
+                      <Avatar sx={{ bgcolor: 'primary.main', mr: 2 }}>
+                        <PersonIcon />
+                      </Avatar>
                     )}
-                  </Typography>
+                    <Box>
+                      <Typography variant="h6" component="div">
+                        {teacher.firstName} {teacher.lastName}
+                      </Typography>
+                      {teacher.subject && (
+                        <Typography variant="body2" color="text.secondary">
+                          {teacher.subject}
+                        </Typography>
+                      )}
+                    </Box>
+                  </Box>
+                  
+                  {/* Öğretmen müsaitlik durumu göstergesi */}
+                  <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                    {teacher.isOnline ? (
+                      <Chip
+                        icon={<OnlineIcon fontSize="small" />}
+                        label="Şu anda müsait"
+                        color="success"
+                        size="small"
+                        sx={{ fontWeight: 'bold' }}
+                      />
+                    ) : (
+                      <Chip
+                        icon={<OfflineIcon fontSize="small" />}
+                        label="Şu anda müsait değil"
+                        color="error"
+                        size="small"
+                        variant="outlined"
+                      />
+                    )}
+                  </Box>
+                  
+                  {teacher.rating !== undefined && teacher.rating > 0 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      <Rating value={teacher.rating} precision={0.5} size="small" readOnly />
+                      <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
+                        ({teacher.ratingCount || 0})
+                      </Typography>
+                    </Box>
+                  )}
+                  
+                  {teacher.hourlyRate !== undefined && teacher.hourlyRate > 0 && (
+                    <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+                      <AttachMoneyIcon fontSize="small" color="primary" />
+                      <Typography variant="body2" color="primary" fontWeight="bold">
+                        {teacher.hourlyRate} TL/saat
+                      </Typography>
+                    </Box>
+                  )}
+                  
+                  {teacher.hobbies && teacher.hobbies.length > 0 && (
+                    <Box sx={{ mt: 2 }}>
+                      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
+                        <strong>Hobiler:</strong>
+                      </Typography>
+                      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                        {teacher.hobbies.slice(0, 3).map((hobby, index) => (
+                          <Chip key={index} label={hobby} size="small" />
+                        ))}
+                        {teacher.hobbies.length > 3 && (
+                          <Chip label={`+${teacher.hobbies.length - 3}`} size="small" variant="outlined" />
+                        )}
+                      </Box>
+                    </Box>
+                  )}
+                  
+                  {teacher.bio && (
+                    <Typography 
+                      variant="body2" 
+                      color="text.secondary" 
+                      sx={{ mt: 2, 
+                        overflow: 'hidden', 
+                        textOverflow: 'ellipsis', 
+                        display: '-webkit-box', 
+                        WebkitLineClamp: 2, 
+                        WebkitBoxOrient: 'vertical' 
+                      }}
+                    >
+                      {teacher.bio}
+                    </Typography>
+                  )}
                 </CardContent>
                 <CardActions>
                   <Button

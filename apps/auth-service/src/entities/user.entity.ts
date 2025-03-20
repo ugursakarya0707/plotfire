@@ -13,6 +13,12 @@ export class UserEntity {
   @Column()
   password: string;
 
+  @Column({ nullable: true })
+  firstName: string;
+
+  @Column({ nullable: true })
+  lastName: string;
+
   @Column({
     type: 'enum',
     enum: UserType,

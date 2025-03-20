@@ -46,6 +46,21 @@ export class ProfileEntity {
   @Column('simple-array', { default: '' })
   education: string[];
 
+  @Column({ nullable: true })
+  subject: string;
+
+  @Column({ type: 'float', nullable: true, default: 0 })
+  hourlyRate: number;
+
+  @Column({ type: 'float', nullable: true, default: 0 })
+  rating: number;
+
+  @Column({ type: 'int', nullable: true, default: 0 })
+  ratingCount: number;
+
+  @Column({ nullable: true })
+  photoUrl: string;
+
   @CreateDateColumn()
   createdAt: Date;
 

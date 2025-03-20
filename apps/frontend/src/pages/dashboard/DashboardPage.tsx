@@ -30,11 +30,11 @@ import { getClasses, getClassesByTeacherId, getEnrollmentsByStudentId } from '..
 import { Class, Enrollment } from '../../types/class';
 import { getAllTeacherConferences, TeacherConference } from '../../services/teacherConferenceService';
 import PendingVideoSessions from '../../components/teacher/PendingVideoSessions';
+import TeacherOnlineStatus from '../../components/teacher/TeacherOnlineStatus';
 
 const DashboardPage: React.FC = () => {
   const { user } = useAuth();
   const [classes, setClasses] = useState<Class[]>([]);
-  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [teachers, setTeachers] = useState<TeacherConference[]>([]);
   const [loading, setLoading] = useState(true);
   const [teachersLoading, setTeachersLoading] = useState(true);
@@ -53,7 +53,6 @@ const DashboardPage: React.FC = () => {
         } else if (user?.userType === UserType.STUDENT && user?.id) {
           // Fetch student enrollments
           const studentEnrollments = await getEnrollmentsByStudentId(user.id);
-          setEnrollments(studentEnrollments);
           
           // Extract classes from enrollments
           const enrolledClasses = studentEnrollments
@@ -124,6 +123,7 @@ const DashboardPage: React.FC = () => {
       {/* Bekleyen Video Görüşmeleri (Sadece öğretmenler için) */}
       {user?.userType === UserType.TEACHER && (
         <Box sx={{ mb: 4 }}>
+          <TeacherOnlineStatus />
           <PendingVideoSessions />
         </Box>
       )}

@@ -29,10 +29,16 @@ export class TeacherConferenceService {
   }
 
   async findByTeacherId(teacherId: string): Promise<TeacherConference> {
+    console.log('findByTeacherId called with teacherId:', teacherId);
+    
     const teacherConference = await this.teacherConferenceModel.findOne({ teacherId, isActive: true }).exec();
+    
+    console.log('Teacher conference found:', teacherConference ? 'Yes' : 'No');
     if (!teacherConference) {
-      throw new NotFoundException(`Teacher conference with teacher ID ${teacherId} not found`);
+      console.log('Teacher conference not found for teacherId:', teacherId);
+      throw new NotFoundException(`Teacher conference not found for teacher ID ${teacherId}`);
     }
+    
     return teacherConference;
   }
 
@@ -53,6 +59,29 @@ export class TeacherConferenceService {
     
     if (!result) {
       throw new NotFoundException(`Teacher conference with ID ${id} not found`);
+    }
+  }
+
+  async updateOnlineStatus(teacherId: string, isOnline: boolean): Promise<TeacherConference> {
+    console.log('updateOnlineStatus called with teacherId:', teacherId, 'isOnline:', isOnline);
+    
+    try {
+      const teacherConference = await this.teacherConferenceModel.findOneAndUpdate(
+        { teacherId, isActive: true },
+        { isOnline },
+        { new: true }
+      ).exec();
+      
+      console.log('Teacher conference updated:', teacherConference ? 'Yes' : 'No');
+      if (!teacherConference) {
+        console.log('Teacher conference not found for teacherId:', teacherId);
+        throw new NotFoundException(`Teacher conference not found for teacher ID ${teacherId}`);
+      }
+      
+      return teacherConference;
+    } catch (error) {
+      console.error('Error in updateOnlineStatus:', error);
+      throw error;
     }
   }
 }
