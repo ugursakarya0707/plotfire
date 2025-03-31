@@ -17,6 +17,7 @@ import {
   IconButton,
   CircularProgress,
   Alert,
+  Snackbar,
 } from '@mui/material';
 import PersonIcon from '@mui/icons-material/Person';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -33,23 +34,22 @@ import TimeIcon from '@mui/icons-material/AccessTime';
 import InfoIcon from '@mui/icons-material/Info';
 import Wifi from '@mui/icons-material/Wifi';
 import WifiOff from '@mui/icons-material/WifiOff';
+import NotificationsActiveIcon from '@mui/icons-material/NotificationsActive';
+import VideoCallIcon from '@mui/icons-material/VideoCall';
 
 import { 
   getTeacherConferenceById, 
-  isTeacherFavorite, 
-  addTeacherToFavorites, 
-  removeTeacherFromFavorites 
+  addTeacherToFavorites,
+  removeTeacherFromFavorites,
+  isTeacherFavorite
 } from '../../services/teacherConferenceService';
-import { UserType } from '../../types/user';
+import { createVideoSession, checkPendingSessionsForTeacher, VideoSession } from '../../services/videoConferenceService';
 import { useAuth } from '../../contexts/AuthContext';
-import { 
-  getTeacherTimeSlots, 
-  bookTimeSlot
-} from '../../services/teacherCalendarService';
-import { createVideoSession } from '../../services/videoConferenceService';
-import { format } from 'date-fns';
+import { UserType } from '../../types/user';
 import { createVideoConferencePayment, createReservationPayment } from '../../services/paymentService';
+import { getTeacherTimeSlots, bookTimeSlot } from '../../services/teacherCalendarService';
 import PaymentModal from '../../components/payment/PaymentModal';
+import { format } from 'date-fns';
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -209,20 +209,19 @@ const TeacherDetailPage: React.FC = () => {
   const [teacher, setTeacher] = useState<any | null>(null);
   const [isFavorite, setIsFavorite] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
-  const [favoriteLoading, setFavoriteLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  const [tabValue, setTabValue] = useState(0);
   const [timeSlots, setTimeSlots] = useState<TimeSlot[]>([]);
-  const [calendarLoading, setCalendarLoading] = useState<boolean>(false);
-  
-  // Ödeme ile ilgili state'ler
+  const [tabValue, setTabValue] = useState<number>(0);
   const [paymentModalOpen, setPaymentModalOpen] = useState<boolean>(false);
-  const [paymentLoading, setPaymentLoading] = useState<boolean>(false);
-  const [paymentClientSecret, setPaymentClientSecret] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
   const [paymentCurrency, setPaymentCurrency] = useState<string>('try');
   const [paymentType, setPaymentType] = useState<'video_conference' | 'reservation'>('video_conference');
   const [reservationIdForPayment, setReservationIdForPayment] = useState<string | null>(null);
+  const [paymentSuccess, setPaymentSuccess] = useState(false);
+  const [snackbarOpen, setSnackbarOpen] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+  const [snackbarSeverity, setSnackbarSeverity] = useState<'success' | 'error' | 'info' | 'warning'>('info');
+  const [pendingVideoSessions, setPendingVideoSessions] = useState<VideoSession[]>([]);
 
   useEffect(() => {
     // Öğretmen bilgilerini getir
@@ -252,7 +251,61 @@ const TeacherDetailPage: React.FC = () => {
     fetchTeacherDetails();
   }, [teacherId, user]);
   
-  // Öğretmen bilgileri yüklendiğinde zaman dilimlerini getir
+  // Öğretmen için bekleyen video konferans isteklerini kontrol et
+  useEffect(() => {
+    const checkPendingVideoSessions = async () => {
+      if (!user || !teacher) return;
+      
+      try {
+        // Öğretmen ID'lerini kontrol et
+        const teacherIds: string[] = [];
+        
+        // Mevcut ID'leri ekle
+        if (teacher.id) teacherIds.push(teacher.id);
+        if (teacher._id) teacherIds.push(teacher._id as string);
+        if (teacher.teacherId) teacherIds.push(teacher.teacherId as string);
+        
+        console.log('TeacherDetailPage: Checking pending sessions with teacher IDs:', teacherIds);
+        
+        if (teacherIds.length === 0) {
+          console.error('TeacherDetailPage: Öğretmen ID bulunamadı:', teacher);
+          return;
+        }
+        
+        // Her bir ID için bekleyen oturumları kontrol et
+        let allSessions: VideoSession[] = [];
+        
+        for (const id of teacherIds) {
+          console.log(`TeacherDetailPage: Checking pending sessions for teacher ID: ${id}`);
+          try {
+            const sessions = await checkPendingSessionsForTeacher(id);
+            console.log(`TeacherDetailPage: Received ${sessions.length} pending sessions for ID ${id}:`, sessions);
+            allSessions = [...allSessions, ...sessions];
+          } catch (error: any) {
+            console.error(`TeacherDetailPage: Error checking pending sessions for ID ${id}:`, error);
+          }
+        }
+        
+        // Tekrarlanan oturumları filtrele
+        const uniqueSessions = allSessions.filter((session, index, self) => 
+          index === self.findIndex(s => s._id === session._id)
+        );
+        
+        console.log(`TeacherDetailPage: Total unique pending sessions: ${uniqueSessions.length}`);
+        setPendingVideoSessions(uniqueSessions);
+        
+      } catch (error) {
+        console.error('Error checking pending video sessions:', error);
+      }
+    };
+    
+    // Sayfa yüklendiğinde ve her 5 saniyede bir kontrol et
+    checkPendingVideoSessions();
+    const interval = setInterval(checkPendingVideoSessions, 5000);
+    
+    return () => clearInterval(interval);
+  }, [teacher, user]);
+  
   useEffect(() => {
     if (!teacher) return;
     
@@ -264,10 +317,7 @@ const TeacherDetailPage: React.FC = () => {
       }
       
       try {
-        setCalendarLoading(true);
-        console.log('Fetching time slots for teacher ID:', teacher.teacherId);
         const slots = await getTeacherTimeSlots(teacher.teacherId);
-        console.log('Time slots fetched successfully:', slots);
         
         // Sadece API'den gelen gerçek zaman dilimlerini kullan
         if (slots && Array.isArray(slots)) {
@@ -280,7 +330,6 @@ const TeacherDetailPage: React.FC = () => {
             typeof slot.isBooked === 'boolean'
           );
           
-          console.log('Valid time slots:', validSlots);
           // Öğretmenin hourlyRate değerini zaman dilimlerine ekle
           const slotsWithRate = validSlots.map(slot => ({
             ...slot,
@@ -299,20 +348,31 @@ const TeacherDetailPage: React.FC = () => {
         console.error('Error fetching time slots:', err);
         setError(err.message || 'Failed to fetch time slots');
         setTimeSlots([]);
-      } finally {
-        setCalendarLoading(false);
       }
     };
     
     fetchTeacherTimeSlots();
   }, [teacher]);
   
+  // Bekleyen video konferans isteklerini göster
+  useEffect(() => {
+    if (pendingVideoSessions.length > 0 && user?.userType === UserType.TEACHER) {
+      // Bekleyen oturumlar varsa daha belirgin bir bildirim göster
+      setSnackbarMessage(`${pendingVideoSessions.length} adet bekleyen video konferans isteği var! Lütfen kontrol ediniz.`);
+      setSnackbarSeverity('warning');
+      setSnackbarOpen(true);
+      
+      // Her bekleyen oturum için konsola detaylı bilgi yazdır
+      pendingVideoSessions.forEach((session, index) => {
+        console.log(`Pending session ${index + 1}:`, session);
+      });
+    }
+  }, [pendingVideoSessions, user]);
+  
   const handleToggleFavorite = async () => {
     if (!teacherId || !user || user.userType !== UserType.STUDENT) return;
     
     try {
-      setFavoriteLoading(true);
-      
       if (isFavorite) {
         await removeTeacherFromFavorites(teacherId);
       } else {
@@ -323,8 +383,6 @@ const TeacherDetailPage: React.FC = () => {
     } catch (err: any) {
       console.error('Error toggling favorite:', err);
       setError(err.message || 'Failed to update favorite status');
-    } finally {
-      setFavoriteLoading(false);
     }
   };
 
@@ -343,7 +401,6 @@ const TeacherDetailPage: React.FC = () => {
       }
       
       // Ödeme işlemini başlat
-      setPaymentLoading(true);
       setPaymentType('video_conference');
       
       // Öğretmenin saatlik ücretini al
@@ -355,7 +412,6 @@ const TeacherDetailPage: React.FC = () => {
       const paymentResponse = await createVideoConferencePayment(teacherId, hourlyRate);
       
       if (paymentResponse && paymentResponse.clientSecret) {
-        setPaymentClientSecret(paymentResponse.clientSecret);
         setPaymentModalOpen(true);
       } else {
         throw new Error('Ödeme başlatılamadı');
@@ -363,29 +419,45 @@ const TeacherDetailPage: React.FC = () => {
     } catch (err: any) {
       console.error('Error starting payment:', err);
       setError(err.message || 'Ödeme başlatılırken bir hata oluştu');
-    } finally {
-      setPaymentLoading(false);
     }
   };
 
   // Ödeme başarılı olduğunda video konferansı başlat
-  const handlePaymentSuccess = async () => {
+  const handlePaymentSuccess = async (paymentResult: any) => {
     try {
       setPaymentModalOpen(false);
       
-      if (paymentType === 'video_conference') {
-        // Video konferansı başlat
-        if (!teacherId || !user) {
-          throw new Error('Öğretmen veya kullanıcı bilgisi eksik');
+      // Video konferans ödemesi başarılı olduğunda
+      if (paymentType === 'video_conference' && paymentResult.success && user) {
+        setPaymentSuccess(true);
+        // Başarı mesajını göster
+        setSnackbarMessage('Ödeme başarılı! Video konferans başlatılıyor...');
+        setSnackbarSeverity('success');
+        setSnackbarOpen(true);
+        
+        // Önce oturumu oluştur
+        // Öğretmen ID'sini doğru şekilde belirle
+        const teacherId = teacher.id || teacher._id || teacher.teacherId;
+        console.log(`Creating video session for teacher: ${teacherId}, student: ${user.id || ''}`);
+        const session = await createVideoSession(teacherId, user.id || '');
+        console.log('Created video session:', session);
+        
+        // Öğretmen için bekleyen oturumları kontrol et
+        if (user.userType === UserType.TEACHER) {
+          const pendingSessions = await checkPendingSessionsForTeacher(teacherId);
+          console.log('Pending sessions after creation:', pendingSessions);
         }
-        const sessionUrl = await createVideoSession(teacherId, user.id);
-        window.open(sessionUrl.roomToken || '#', '_blank');
-      } else if (paymentType === 'reservation' && reservationIdForPayment) {
+        
+        // Video konferans sayfasına yönlendir
+        navigate(`/video-conference/${session._id}`);
+      } else if (paymentType === 'reservation' && reservationIdForPayment && paymentResult.success) {
         // Rezervasyon işlemini tamamla
         await bookTimeSlot(reservationIdForPayment);
         
         // Başarı mesajı göster
-        alert('Rezervasyon başarıyla tamamlandı!');
+        setSnackbarMessage('Rezervasyon başarıyla tamamlandı!');
+        setSnackbarSeverity('success');
+        setSnackbarOpen(true);
         
         // Zaman dilimlerini yeniden yükle
         if (teacher && teacher.teacherId) {
@@ -410,7 +482,9 @@ const TeacherDetailPage: React.FC = () => {
       }
     } catch (err: any) {
       console.error('Error after payment:', err);
-      setError(err.message || 'İşlem sırasında bir hata oluştu');
+      setSnackbarMessage(`İşlem sırasında bir hata oluştu: ${err.message}`);
+      setSnackbarSeverity('error');
+      setSnackbarOpen(true);
     }
   };
 
@@ -426,8 +500,6 @@ const TeacherDetailPage: React.FC = () => {
     }
     
     try {
-      setCalendarLoading(true);
-      
       // Saatlik ücret kontrolü
       if (!hourlyRate || hourlyRate <= 0) {
         // Eğer hourlyRate geçersizse, öğretmenin hourlyRate değerini kullan
@@ -435,7 +507,6 @@ const TeacherDetailPage: React.FC = () => {
       }
       
       // Ödeme işlemini başlat
-      setPaymentLoading(true);
       setPaymentType('reservation');
       setPaymentAmount(hourlyRate);
       setPaymentCurrency('try');
@@ -451,7 +522,6 @@ const TeacherDetailPage: React.FC = () => {
       const paymentResponse = await createReservationPayment(teacherId, hourlyRate, timeSlotId);
       
       if (paymentResponse && paymentResponse.clientSecret) {
-        setPaymentClientSecret(paymentResponse.clientSecret);
         setPaymentModalOpen(true);
       } else {
         throw new Error('Ödeme başlatılamadı');
@@ -459,14 +529,15 @@ const TeacherDetailPage: React.FC = () => {
     } catch (err: any) {
       console.error('Error booking time slot:', err);
       alert(err.message || 'Ders rezervasyonu yapılırken bir hata oluştu');
-    } finally {
-      setCalendarLoading(false);
-      setPaymentLoading(false);
     }
   };
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
+  };
+
+  const handleSnackbarClose = () => {
+    setSnackbarOpen(false);
   };
 
   if (loading) {
@@ -509,6 +580,64 @@ const TeacherDetailPage: React.FC = () => {
 
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+      
+      {/* Bekleyen Video Konferans İstekleri */}
+      {user?.userType === UserType.TEACHER && pendingVideoSessions.length > 0 && (
+        <Paper 
+          elevation={3} 
+          sx={{ 
+            p: 2, 
+            mb: 3, 
+            border: '2px solid #f57c00',
+            backgroundColor: '#fff3e0' 
+          }}
+        >
+          <Typography variant="h6" color="primary" gutterBottom>
+            <NotificationsActiveIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            Bekleyen Video Konferans İstekleri ({pendingVideoSessions.length})
+          </Typography>
+          
+          <Box sx={{ mt: 2 }}>
+            {pendingVideoSessions.map((session) => (
+              <Box 
+                key={session._id} 
+                sx={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center',
+                  p: 1,
+                  mb: 1,
+                  borderRadius: 1,
+                  backgroundColor: 'rgba(255, 255, 255, 0.7)'
+                }}
+              >
+                <Box>
+                  <Typography variant="body1">
+                    <strong>Öğrenci ID:</strong> {session.studentId}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    <strong>Oluşturulma:</strong> {new Date(session.createdAt).toLocaleString()}
+                  </Typography>
+                </Box>
+                <Button 
+                  variant="contained" 
+                  color="primary"
+                  startIcon={<VideoCallIcon />}
+                  onClick={() => navigate(`/video-conference/${session._id}`)}
+                >
+                  Katıl
+                </Button>
+              </Box>
+            ))}
+          </Box>
+        </Paper>
+      )}
+      
       <Button
         startIcon={<ArrowBackIcon />}
         onClick={handleGoBack}
@@ -545,7 +674,6 @@ const TeacherDetailPage: React.FC = () => {
                     color={isFavorite ? 'secondary' : 'primary'}
                     startIcon={isFavorite ? <FavoriteIcon /> : <FavoriteBorderIcon />}
                     onClick={handleToggleFavorite}
-                    disabled={favoriteLoading}
                     fullWidth
                     sx={{ mb: 2 }}
                   >
@@ -559,7 +687,7 @@ const TeacherDetailPage: React.FC = () => {
                     color="primary"
                     startIcon={<VideocamIcon />}
                     onClick={handleStartVideoSession}
-                    disabled={!teacher.isOnline || paymentLoading}
+                    disabled={!teacher.isOnline}
                     fullWidth
                   >
                     Video Konferans Başlat
@@ -622,17 +750,11 @@ const TeacherDetailPage: React.FC = () => {
                         )}
                       </Box>
                       
-                      {calendarLoading ? (
-                        <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-                          <CircularProgress />
-                        </Box>
-                      ) : (
-                        <AvailabilityList 
-                          timeSlots={timeSlots} 
-                          onBookTimeSlot={user?.userType === UserType.STUDENT ? handleBookTimeSlot : undefined}
-                          isStudent={user?.userType === UserType.STUDENT}
-                        />
-                      )}
+                      <AvailabilityList 
+                        timeSlots={timeSlots} 
+                        onBookTimeSlot={user?.userType === UserType.STUDENT ? handleBookTimeSlot : undefined}
+                        isStudent={user?.userType === UserType.STUDENT}
+                      />
                     </Grid>
                   </Grid>
                 </TabPanel>
@@ -670,13 +792,22 @@ const TeacherDetailPage: React.FC = () => {
           <PaymentModal
             open={paymentModalOpen}
             onClose={() => setPaymentModalOpen(false)}
-            clientSecret={paymentClientSecret}
             amount={paymentAmount}
             currency={paymentCurrency}
-            loading={paymentLoading}
             onSuccess={handlePaymentSuccess}
-            title={paymentType === 'video_conference' ? 'Video Konferans Ödemesi' : 'Rezervasyon Ödemesi'}
+            paymentType={paymentType}
           />
+
+          <Snackbar
+            open={snackbarOpen}
+            autoHideDuration={6000}
+            onClose={handleSnackbarClose}
+            anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+          >
+            <Alert onClose={handleSnackbarClose} severity={snackbarSeverity} sx={{ width: '100%' }}>
+              {snackbarMessage}
+            </Alert>
+          </Snackbar>
         </>
       )}
     </Container>

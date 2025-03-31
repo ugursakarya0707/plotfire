@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: video-conference-service-config
+data:
+  mongodb-uri: "mongodb://mongodb:27017/video-conference-service"
+  livekit-host: "http://livekit-server:7880"

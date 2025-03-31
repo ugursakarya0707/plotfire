@@ -1,0 +1,60 @@
+/* Basic LiveKit styles */
+.lk-video-conference {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+}
+
+.lk-participant {
+  position: relative;
+  border-radius: 8px;
+  overflow: hidden;
+  background-color: #1a1a1a;
+}
+
+.lk-participant-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.lk-participant-metadata {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  color: white;
+  background-color: rgba(0, 0, 0, 0.5);
+  padding: 5px 10px;
+  border-radius: 4px;
+}
+
+.lk-control-bar {
+  display: flex;
+  justify-content: center;
+  padding: 10px;
+  background-color: #f5f5f5;
+  border-top: 1px solid #e0e0e0;
+}
+
+.lk-button {
+  margin: 0 5px;
+  padding: 8px 16px;
+  border-radius: 4px;
+  border: none;
+  background-color: #2196f3;
+  color: white;
+  cursor: pointer;
+}
+
+.lk-button:hover {
+  background-color: #1976d2;
+}
+
+.lk-button.danger {
+  background-color: #f44336;
+}
+
+.lk-button.danger:hover {
+  background-color: #d32f2f;
+}

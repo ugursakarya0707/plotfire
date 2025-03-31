@@ -1,308 +1,606 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   Box,
-  Container,
-  Typography,
   Button,
-  CircularProgress,
-  Alert,
+  Typography,
   Paper,
-  Divider,
+  Grid,
+  CircularProgress,
+  IconButton,
 } from '@mui/material';
 import {
-  ArrowBack as ArrowBackIcon,
-  Call as CallIcon,
+  Videocam as VideocamIcon,
+  VideocamOff as VideocamOffIcon,
+  Mic as MicIcon,
+  MicOff as MicOffIcon,
   CallEnd as CallEndIcon,
 } from '@mui/icons-material';
-import {
-  LiveKitRoom,
-  VideoConference,
-} from '@livekit/components-react';
-import '@livekit/components-styles';
 import { useAuth } from '../../contexts/AuthContext';
-import { UserType } from '../../types/user';
-import { 
-  getVideoSession, 
-  startVideoSession, 
-  getStudentToken, 
-  completeVideoSession, 
-  cancelVideoSession 
+import {
+  getVideoSession,
+  endVideoSession,
+  joinVideoSessionAsTeacher,
+  joinVideoSessionAsStudent,
+  getActiveSessionDetails,
 } from '../../services/videoConferenceService';
-import { getTeacherConferenceById } from '../../services/teacherConferenceService';
+import { UserType } from '../../types/user';
+import {
+  getLiveKitParticipants,
+  endLiveKitSession,
+  toggleCamera as toggleCameraService,
+  toggleMicrophone as toggleMicrophoneService,
+  initializeLiveKitSession
+} from '../../services/webrtcService';
 
-interface TeacherInfo {
-  name: string; 
-}
-
+// Video konferans sayfası
 const VideoConferencePage: React.FC = () => {
   const { sessionId } = useParams<{ sessionId: string }>();
-  const navigate = useNavigate();
   const { user } = useAuth();
+  const navigate = useNavigate();
+
+  // State değişkenleri
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [roomName, setRoomName] = useState<string | null>(null);
-  const [sessionStatus, setSessionStatus] = useState<string>('waiting');
-  const [teacherInfo, setTeacherInfo] = useState<TeacherInfo | null>(null);
-  const [isConnecting, setIsConnecting] = useState<boolean>(false);
+  const [sessionActive, setSessionActive] = useState<boolean>(false);
+  const [cameraEnabled, setCameraEnabled] = useState<boolean>(true);
+  const [micEnabled, setMicEnabled] = useState<boolean>(true);
+  const [connectionStatus, setConnectionStatus] = useState<string>('disconnected');
+  const [participants, setParticipants] = useState<any[]>([]);
+  const [token, setToken] = useState<string>('');
 
-  useEffect(() => {
-    const fetchSessionData = async () => {
-      if (!sessionId || !user) {
-        setError('Geçersiz oturum veya kullanıcı bilgisi');
-        setLoading(false);
-        return;
+  // Video referansları
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const localStream = useRef<MediaStream | null>(null);
+
+  // Kaynakları temizle - İlk olarak tanımlayalım
+  const cleanupResources = useCallback(() => {
+    // Polling mekanizmasını durdur
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
+    // Video elementlerini temizle
+    if (localVideoRef.current) {
+      localVideoRef.current.srcObject = null;
+      localVideoRef.current.src = '';
+    }
+    
+    if (remoteVideoRef.current) {
+      remoteVideoRef.current.srcObject = null;
+      remoteVideoRef.current.src = '';
+    }
+  }, []);
+
+  // Görüşmeyi sonlandır - İkinci olarak tanımlayalım
+  const endCall = useCallback(async () => {
+    try {
+      // Kaynakları temizle
+      cleanupResources();
+      
+      // Öğretmen ise oturumu sonlandır
+      if (user?.userType === UserType.TEACHER && sessionId) {
+        try {
+          // Video oturumunu sonlandır
+          await endVideoSession(sessionId);
+          
+          // LiveKit oturumunu sonlandır
+          await endLiveKitSession(sessionId);
+          
+          console.log('Session ended successfully');
+        } catch (error) {
+          console.error('Error ending video session:', error);
+        }
       }
+      
+      // Dashboard'a yönlendir
+      navigate('/dashboard');
+    } catch (error) {
+      console.error('Error ending call:', error);
+      // Hata olsa bile dashboard'a yönlendir
+      navigate('/dashboard');
+    }
+  }, [sessionId, user, navigate, cleanupResources]);
 
+  // Medya akışlarını kur
+  const setupMediaStreams = useCallback(async () => {
+    try {
+      // Yerel video akışı için getUserMedia kullan
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: true,
+        audio: true
+      });
+      
+      // Yerel video elementine bağla
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+      }
+      
+      // Kamera ve mikrofon durumunu ayarla
+      const videoTrack = stream.getVideoTracks()[0];
+      const audioTrack = stream.getAudioTracks()[0];
+      
+      if (videoTrack) {
+        videoTrack.enabled = cameraEnabled;
+      }
+      
+      if (audioTrack) {
+        audioTrack.enabled = micEnabled;
+      }
+      
+      setConnectionStatus('connected');
+      localStream.current = stream;
+    } catch (error) {
+      console.error('Error setting up media streams:', error);
+      setError('Kamera ve mikrofon erişimi sağlanamadı');
+      setCameraEnabled(false);
+      setMicEnabled(false);
+    }
+  }, [cameraEnabled, micEnabled]);
+
+  // Polling mekanizması
+  const startPolling = useCallback(() => {
+    if (!sessionId || !user) return;
+    
+    console.log('Starting polling for session status and participants');
+    
+    // Her 5 saniyede bir oturum durumunu ve katılımcıları kontrol et
+    const intervalId = setInterval(async () => {
       try {
-        setLoading(true);
+        // Önce oturum durumunu kontrol et
+        const sessionData = await getVideoSession(sessionId);
+        console.log('Polling - Session status:', sessionData.status, 'isActive:', sessionData.isActive);
         
-        // Oturum bilgilerini getir
-        const session = await getVideoSession(sessionId);
-        setSessionStatus(session.status);
-        setRoomName(session.roomName);
+        // Oturum durumunu güncelle
+        setSessionActive(sessionData.status === 'ACTIVE' || sessionData.isActive === true);
         
-        // Öğretmen bilgilerini getir
-        const teacherData = await getTeacherConferenceById(session.teacherId);
-        setTeacherInfo({
-          name: teacherData.name || `Öğretmen-${teacherData.id}` 
-        });
-        
-        // Kullanıcı adını güvenli bir şekilde al
-        const userName = user.email?.split('@')[0] || `Kullanıcı-${user.id || 'unknown'}`;
-        
-        // Kullanıcı tipine göre işlem yap
-        if (user.userType === UserType.TEACHER) {
-          if (session.status === 'waiting') {
-            // Öğretmen için oturumu başlat
-            const updatedSession = await startVideoSession(
-              sessionId,
-              teacherData.name || userName,
-              'Öğrenci' // Varsayılan öğrenci adı
-            );
-            setToken(updatedSession.roomToken || '');
-          } else if (session.status === 'active') {
-            // Aktif oturum için token al
-            const updatedSession = await startVideoSession(
-              sessionId,
-              teacherData.name || userName,
-              'Öğrenci' // Varsayılan öğrenci adı
-            );
-            setToken(updatedSession.roomToken || '');
-          }
-        } else {
-          // Öğrenci için token al
-          if (session.status === 'active') {
-            const studentToken = await getStudentToken(
-              sessionId,
-              userName // Güvenli kullanıcı adı
-            );
-            setToken(studentToken);
+        // Oturum aktif hale geldiyse ve öğrenci ise, token almayı dene
+        if ((sessionData.status === 'ACTIVE' || sessionData.isActive === true) && 
+            user.userType !== UserType.TEACHER && 
+            !token) {
+          console.log('Session is now ACTIVE, student attempting to join');
+          try {
+            const userName = user.firstName 
+              ? `${user.firstName} ${user.lastName || ''}`
+              : user.email?.split('@')[0] || `Kullanıcı-${user.id || 'unknown'}`;
+            
+            // Önce oturumu aktif olarak işaretle (backend'e bildir)
+            await getActiveSessionDetails(sessionId);
+            
+            const studentToken = await joinVideoSessionAsStudent(sessionId, userName);
+            console.log('Student token received:', studentToken ? 'Yes' : 'No');
+            if (studentToken) {
+              localStorage.setItem(`videoSession_${sessionId}_token`, studentToken);
+              setToken(studentToken);
+              setSessionActive(true);
+            }
+          } catch (error) {
+            console.error('Error joining as student during polling:', error);
+            // 10 saniye sonra tekrar dene
+            setTimeout(() => {
+              console.log('Retrying student join after error...');
+            }, 10000);
           }
         }
         
-        setLoading(false);
-      } catch (error: any) {
-        console.error('Error fetching session data:', error);
-        setError(error.message || 'Oturum bilgileri alınamadı');
-        setLoading(false);
+        // Katılımcı bilgilerini al - Her polling'de değil, sadece belirli aralıklarla
+        if (Date.now() % 2 === 0) { // Yaklaşık olarak her iki polling'de bir
+          try {
+            const participantsData = await getLiveKitParticipants(sessionId);
+            console.log('Participants data:', participantsData);
+            setParticipants(participantsData || []);
+            
+            // Uzak video akışını güncelle
+            if (remoteVideoRef.current && participantsData && participantsData.length > 0) {
+              // Backend'den gelen stream URL'ini kullan
+              const remoteParticipant = participantsData.find(p => 
+                (user?.userType === UserType.TEACHER && p.type === 'student') ||
+                (user?.userType !== UserType.TEACHER && p.type === 'teacher')
+              );
+              
+              if (remoteParticipant && remoteParticipant.streamUrl) {
+                // HTML video elementinde srcObject veya src kullanımı
+                if ('srcObject' in HTMLVideoElement.prototype) {
+                  // Modern tarayıcılar için
+                  // Not: Gerçek uygulamada, MediaStream nesnesi gerekir
+                  // Bu örnek için, sadece URL'i gösteriyoruz
+                  console.log('Remote participant stream URL:', remoteParticipant.streamUrl);
+                } else {
+                  // Eski tarayıcılar için
+                  remoteVideoRef.current.src = remoteParticipant.streamUrl;
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Error getting participants:', error);
+            // Hata durumunda boş dizi kullan
+            setParticipants([]);
+          }
+        }
+        
+        // Oturum sonlandıysa
+        if (participants.some(p => p.status === 'ended')) {
+          console.log('Session ended by remote participant');
+          endCall();
+        }
+      } catch (error) {
+        console.error('Error polling session status and participants:', error);
+      }
+    }, 5000);
+    
+    // Interval'i ref'e kaydet
+    pollingIntervalRef.current = intervalId;
+    
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
       }
     };
+  }, [sessionId, user, endCall, remoteVideoRef, token]);
 
-    fetchSessionData();
-  }, [sessionId, user]);
-
-  const handleStartSession = async () => {
-    if (!sessionId || !user || !teacherInfo) return;
-    
+  // Kamera durumunu değiştir
+  const toggleCamera = async () => {
     try {
-      setIsConnecting(true);
-      // Kullanıcı adını güvenli bir şekilde al
-      const userName = user.email?.split('@')[0] || `Kullanıcı-${user.id || 'unknown'}`;
+      setCameraEnabled(!cameraEnabled);
       
-      const updatedSession = await startVideoSession(
-        sessionId,
-        teacherInfo.name || userName,
-        'Öğrenci' // Varsayılan öğrenci adı
-      );
-      setToken(updatedSession.roomToken || '');
-      setSessionStatus('active');
-      setIsConnecting(false);
+      if (sessionId) {
+        // LiveKit servisi üzerinden kamera durumunu değiştir
+        await toggleCameraService(sessionId, !cameraEnabled);
+        console.log(`Camera ${!cameraEnabled ? 'enabled' : 'disabled'}`);
+        
+        // Yerel video akışını güncelle
+        if (localVideoRef.current && localStream.current) {
+          const videoTracks = localStream.current.getVideoTracks();
+          videoTracks.forEach(track => {
+            track.enabled = !cameraEnabled;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling camera:', error);
+      // Hata durumunda eski duruma geri dön
+      setCameraEnabled(cameraEnabled);
+    }
+  };
+
+  // Mikrofon durumunu değiştir
+  const toggleMicrophone = async () => {
+    try {
+      setMicEnabled(!micEnabled);
+      
+      if (sessionId) {
+        // LiveKit servisi üzerinden mikrofon durumunu değiştir
+        await toggleMicrophoneService(sessionId, !micEnabled);
+        console.log(`Microphone ${!micEnabled ? 'enabled' : 'disabled'}`);
+        
+        // Yerel ses akışını güncelle
+        if (localStream.current) {
+          const audioTracks = localStream.current.getAudioTracks();
+          audioTracks.forEach(track => {
+            track.enabled = !micEnabled;
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling microphone:', error);
+      // Hata durumunda eski duruma geri dön
+      setMicEnabled(micEnabled);
+    }
+  };
+
+  // Video oturumunu başlat - Son olarak tanımlayalım
+  const startSession = useCallback(async () => {
+    try {
+      if (!sessionId || !user) return;
+      
+      setLoading(true);
+      setError('');
+      
+      // Kullanıcı adını belirle
+      const userName = user.firstName 
+        ? `${user.firstName} ${user.lastName || ''}`
+        : user.email?.split('@')[0] || `Kullanıcı-${user.id || 'unknown'}`;
+      
+      console.log(`Session data:`, sessionId);
+      
+      // Kullanıcı tipine göre farklı katılma akışları
+      if (user.userType === UserType.TEACHER) {
+        console.log('Teacher attempting to join with name:', userName);
+        
+        try {
+          // Öğretmen olarak katıl
+          const updatedSession = await joinVideoSessionAsTeacher(sessionId, userName);
+          console.log('Teacher joined successfully:', updatedSession);
+          
+          // Token'ı localStorage'a kaydet ve state'e ata
+          if (updatedSession.roomToken) {
+            localStorage.setItem(`videoSession_${sessionId}_token`, updatedSession.roomToken);
+            setToken(updatedSession.roomToken);
+            setSessionActive(true);
+            
+            // LiveKit bağlantısını başlat
+            await initializeLiveKitSession(sessionId, userName, true);
+          } else {
+            throw new Error('No token received from server');
+          }
+        } catch (error: any) {
+          console.error('Error joining as teacher:', error);
+          
+          // Eğer oturum zaten aktifse, token'ı almaya çalış
+          if (error.message && error.message.includes('already')) {
+            console.log('Session is already active, trying to get session details');
+            
+            try {
+              const activeSession = await getActiveSessionDetails(sessionId);
+              console.log('Active session details:', activeSession);
+              
+              if (activeSession.roomToken) {
+                localStorage.setItem(`videoSession_${sessionId}_token`, activeSession.roomToken);
+                setToken(activeSession.roomToken);
+                setSessionActive(true);
+                
+                // LiveKit bağlantısını başlat
+                await initializeLiveKitSession(sessionId, userName, true);
+              } else {
+                throw new Error('No token in active session');
+              }
+            } catch (detailsError) {
+              console.error('Error getting active session details:', detailsError);
+              setError('Oturum başlatılamadı. Lütfen tekrar deneyin.');
+            }
+          } else {
+            setError(`Oturum başlatılamadı: ${error.message}`);
+          }
+        }
+      } else {
+        // Öğrenci olarak katıl
+        console.log('Session is active, student attempting to join with name:', userName);
+        
+        try {
+          // Öğrenci olarak katıl
+          const studentToken = await joinVideoSessionAsStudent(sessionId, userName);
+          
+          if (studentToken) {
+            localStorage.setItem(`videoSession_${sessionId}_token`, studentToken);
+            setToken(studentToken);
+            setSessionActive(true);
+            
+            // LiveKit bağlantısını başlat
+            await initializeLiveKitSession(sessionId, userName, false);
+          } else {
+            throw new Error('No token received from server');
+          }
+        } catch (error: any) {
+          console.error('Error getting student token:', error);
+          
+          if (error.message && error.message.includes('not active')) {
+            setError('Öğretmen henüz oturuma katılmadı. Lütfen bekleyin...');
+            // Polling ile öğretmenin katılmasını bekle
+          } else {
+            setError(`Oturuma katılınamadı: ${error.message}`);
+          }
+        }
+      }
+      
+      // Medya akışlarını ayarla
+      await setupMediaStreams();
+      
+      // Polling başlat
+      startPolling();
+      
     } catch (error: any) {
       console.error('Error starting session:', error);
-      setError(error.message || 'Oturum başlatılamadı');
-      setIsConnecting(false);
+      setError(`Oturum başlatılamadı: ${error.message}`);
+    } finally {
+      setLoading(false);
     }
-  };
+  }, [sessionId, user, setupMediaStreams, startPolling]);
 
-  const handleEndSession = async () => {
-    if (!sessionId) return;
-    
-    try {
-      await completeVideoSession(sessionId);
-      navigate('/dashboard');
-    } catch (error: any) {
-      console.error('Error ending session:', error);
-      setError(error.message || 'Oturum sonlandırılamadı');
+  // Sayfa yüklendiğinde oturumu başlat
+  useEffect(() => {
+    if (sessionId && user) {
+      startSession();
     }
-  };
 
-  const handleCancelSession = async () => {
-    if (!sessionId) return;
-    
-    try {
-      await cancelVideoSession(sessionId);
-      navigate('/dashboard');
-    } catch (error: any) {
-      console.error('Error canceling session:', error);
-      setError(error.message || 'Oturum iptal edilemedi');
+    return () => {
+      // Temizlik işlemleri
+      cleanupResources();
+    };
+  }, [sessionId, user, cleanupResources, startSession]);
+
+  // Oturum aktif olduğunda medya akışlarını başlat
+  useEffect(() => {
+    if (sessionActive && sessionId) {
+      // Medya akışlarını başlat
+      setupMediaStreams();
+      // Polling mekanizmasını başlat
+      startPolling();
     }
-  };
+  }, [sessionActive, sessionId, setupMediaStreams, startPolling]);
 
-  const handleBack = () => {
-    navigate('/dashboard');
-  };
-
+  // Yükleniyor durumu
   if (loading) {
     return (
-      <Container maxWidth="md" sx={{ mt: 4, textAlign: 'center' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress />
-        <Typography variant="h6" sx={{ mt: 2 }}>
-          Oturum bilgileri yükleniyor...
-        </Typography>
-      </Container>
+      </Box>
     );
   }
 
+  // Hata durumu
   if (error) {
     return (
-      <Container maxWidth="md" sx={{ mt: 4 }}>
-        <Alert severity="error">{error}</Alert>
-        <Button
-          variant="outlined"
-          startIcon={<ArrowBackIcon />}
-          onClick={handleBack}
-          sx={{ mt: 2 }}
-        >
-          Geri Dön
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Typography variant="h5" color="error" gutterBottom>
+          {error}
+        </Typography>
+        <Button variant="contained" onClick={() => navigate('/dashboard')}>
+          Ana Sayfaya Dön
         </Button>
-      </Container>
+      </Box>
     );
   }
 
-  return (
-    <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
-      <Paper elevation={3} sx={{ p: 3 }}>
-        <Box sx={{ mb: 2, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Button
-            variant="outlined"
-            startIcon={<ArrowBackIcon />}
-            onClick={handleBack}
-          >
-            Dashboard'a Dön
-          </Button>
-          
-          <Typography variant="h5" component="h1">
-            Video Konferans
+  // Öğretmen bekleniyor durumu (öğrenci için)
+  if (user?.userType !== UserType.TEACHER && !participants.some(p => p.type === 'teacher')) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Paper elevation={3} sx={{ p: 4, maxWidth: 500, mx: 'auto' }}>
+          <Typography variant="h5" gutterBottom>
+            Öğretmen Bekleniyor
           </Typography>
-          
-          {sessionStatus === 'active' && (
-            <Button
-              variant="contained"
-              color="error"
-              startIcon={<CallEndIcon />}
-              onClick={handleEndSession}
-            >
-              Görüşmeyi Sonlandır
-            </Button>
-          )}
-        </Box>
-        
-        <Divider sx={{ mb: 3 }} />
-        
-        {sessionStatus === 'waiting' && (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              {user?.userType === UserType.STUDENT
-                ? 'Öğretmenin katılması bekleniyor...'
-                : 'Görüşmeyi başlatmak için hazır mısınız?'}
-            </Typography>
-            
-            {user?.userType === UserType.TEACHER && (
-              <Button
-                variant="contained"
-                color="primary"
-                size="large"
-                startIcon={<CallIcon />}
-                onClick={handleStartSession}
-                disabled={isConnecting}
-                sx={{ mt: 2 }}
-              >
-                {isConnecting ? 'Bağlanıyor...' : 'Görüşmeyi Başlat'}
-              </Button>
-            )}
-            
-            <Button
-              variant="outlined"
-              color="error"
-              size="large"
-              onClick={handleCancelSession}
-              sx={{ mt: 2, ml: user?.userType === UserType.TEACHER ? 2 : 0 }}
-            >
-              İptal Et
-            </Button>
-          </Box>
-        )}
-        
-        {sessionStatus === 'active' && token && roomName && (
-          <Box sx={{ height: '70vh', width: '100%' }}>
-            <div style={{ height: '100%', width: '100%' }}>
-              <LiveKitRoom
-                serverUrl={process.env.REACT_APP_LIVEKIT_URL || 'wss://your-livekit-server.com'}
-                token={token}
-                connectOptions={{ autoSubscribe: true }}
-                data-lk-theme="default"
-              >
-                <VideoConference />
-              </LiveKitRoom>
-            </div>
-          </Box>
-        )}
-        
-        {sessionStatus === 'completed' && (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Görüşme tamamlandı.
-            </Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleBack}
-              sx={{ mt: 2 }}
-            >
-              Dashboard'a Dön
-            </Button>
-          </Box>
-        )}
-        
-        {sessionStatus === 'cancelled' && (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <Typography variant="h6" gutterBottom>
-              Görüşme iptal edildi.
-            </Typography>
-            <Button
-              variant="contained"
-              color="primary"
-              onClick={handleBack}
-              sx={{ mt: 2 }}
-            >
-              Dashboard'a Dön
-            </Button>
-          </Box>
-        )}
+          <CircularProgress sx={{ my: 2 }} />
+          <Typography variant="body1">
+            Öğretmen görüşmeye katıldığında otomatik olarak bağlanacaksınız.
+          </Typography>
+        </Paper>
+      </Box>
+    );
+  }
+
+  // Ana görüşme arayüzü
+  return (
+    <Box sx={{ p: 3 }}>
+      {/* Başlık */}
+      <Paper elevation={1} sx={{ p: 2, mb: 2 }}>
+        <Typography variant="h5" component="h1">
+          Video Konferans
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Durum: {connectionStatus === 'connected' ? 'Bağlı' : 'Bağlanıyor...'}
+        </Typography>
       </Paper>
-    </Container>
+
+      {/* Video alanı */}
+      <Grid container spacing={2}>
+        {/* Uzak video (karşı taraf) */}
+        <Grid item xs={12} md={8}>
+          <Paper
+            elevation={3}
+            sx={{
+              p: 2,
+              height: 400,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              backgroundColor: '#f0f0f0',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
+              <video
+                ref={remoteVideoRef}
+                autoPlay
+                playsInline
+                muted={false}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  backgroundColor: '#000'
+                }}
+              />
+              {!participants.some(p => 
+                (user?.userType === UserType.TEACHER && p.type === 'student') ||
+                (user?.userType !== UserType.TEACHER && p.type === 'teacher')
+              ) && (
+                <Typography
+                  variant="body1"
+                  sx={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    color: '#fff',
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    padding: '8px 16px',
+                    borderRadius: '4px'
+                  }}
+                >
+                  {user?.userType === UserType.TEACHER ? 'Öğrenci bekleniyor...' : 'Öğretmen bekleniyor...'}
+                </Typography>
+              )}
+            </Box>
+          </Paper>
+        </Grid>
+
+        {/* Yerel video (kendi görüntüsü) */}
+        <Grid item xs={12} md={4}>
+          <Paper
+            elevation={3}
+            sx={{
+              p: 2,
+              height: 400,
+              display: 'flex',
+              flexDirection: 'column',
+              justifyContent: 'center',
+              alignItems: 'center',
+              backgroundColor: '#f0f0f0',
+              position: 'relative',
+              overflow: 'hidden'
+            }}
+          >
+            <Box sx={{ width: '100%', height: '100%', position: 'relative' }}>
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted={true}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'cover',
+                  backgroundColor: '#000'
+                }}
+              />
+              {!cameraEnabled && (
+                <Typography
+                  variant="body1"
+                  sx={{
+                    position: 'absolute',
+                    top: '50%',
+                    left: '50%',
+                    transform: 'translate(-50%, -50%)',
+                    color: '#fff',
+                    backgroundColor: 'rgba(0,0,0,0.5)',
+                    padding: '8px 16px',
+                    borderRadius: '4px'
+                  }}
+                >
+                  Kamera kapalı
+                </Typography>
+              )}
+            </Box>
+          </Paper>
+        </Grid>
+      </Grid>
+
+      {/* Kontrol butonları */}
+      <Paper elevation={3} sx={{ p: 2, mt: 2, display: 'flex', justifyContent: 'center' }}>
+        <IconButton
+          color={cameraEnabled ? 'primary' : 'default'}
+          onClick={toggleCamera}
+          sx={{ mx: 1 }}
+        >
+          {cameraEnabled ? <VideocamIcon /> : <VideocamOffIcon />}
+        </IconButton>
+        <IconButton
+          color={micEnabled ? 'primary' : 'default'}
+          onClick={toggleMicrophone}
+          sx={{ mx: 1 }}
+        >
+          {micEnabled ? <MicIcon /> : <MicOffIcon />}
+        </IconButton>
+        <IconButton color="error" onClick={endCall} sx={{ mx: 1 }}>
+          <CallEndIcon />
+        </IconButton>
+      </Paper>
+    </Box>
   );
 };
 

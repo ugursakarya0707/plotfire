@@ -1,29 +1,35 @@
-import React from 'react';
-import { Modal, Box, Typography, CircularProgress } from '@mui/material';
+import React, { useState } from 'react';
+import { Modal, Box, Typography, CircularProgress, Button } from '@mui/material';
 import PaymentForm from './PaymentForm';
 import StripeProvider from '../../providers/StripeProvider';
 
 interface PaymentModalProps {
   open: boolean;
   onClose: () => void;
-  clientSecret: string | null;
   amount: number;
   currency: string;
-  loading: boolean;
-  onSuccess: () => void;
-  title?: string;
+  onSuccess: (result: any) => void;
+  paymentType: 'video_conference' | 'reservation';
 }
 
 const PaymentModal: React.FC<PaymentModalProps> = ({
   open,
   onClose,
-  clientSecret,
   amount,
   currency,
-  loading,
   onSuccess,
-  title = 'Ödeme İşlemi'
+  paymentType
 }) => {
+  const [loading, setLoading] = useState(false);
+  
+  const handlePaymentSuccess = () => {
+    // Simulate a successful payment
+    const result = { success: true };
+    onSuccess(result);
+  };
+  
+  const title = paymentType === 'video_conference' ? 'Video Konferans Ödemesi' : 'Rezervasyon Ödemesi';
+  
   return (
     <Modal
       open={open}
@@ -51,20 +57,35 @@ const PaymentModal: React.FC<PaymentModalProps> = ({
           <Box sx={{ display: 'flex', justifyContent: 'center', my: 4 }}>
             <CircularProgress />
           </Box>
-        ) : clientSecret ? (
-          <StripeProvider>
-            <PaymentForm
-              clientSecret={clientSecret}
-              amount={amount}
-              currency={currency}
-              onSuccess={onSuccess}
-              onCancel={onClose}
-            />
-          </StripeProvider>
         ) : (
-          <Typography color="error">
-            Ödeme başlatılamadı. Lütfen daha sonra tekrar deneyin.
-          </Typography>
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="body1" gutterBottom>
+              Ödeme Tutarı: {amount} {currency.toUpperCase()}
+            </Typography>
+            
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Bu bir test uygulamasıdır. Gerçek ödeme alınmayacaktır.
+            </Typography>
+            
+            {/* Basitleştirilmiş ödeme formu */}
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 3 }}>
+              <Button 
+                variant="outlined" 
+                onClick={onClose}
+                disabled={loading}
+              >
+                İptal
+              </Button>
+              <Button 
+                variant="contained" 
+                color="primary"
+                onClick={handlePaymentSuccess}
+                disabled={loading}
+              >
+                Ödemeyi Tamamla
+              </Button>
+            </Box>
+          </Box>
         )}
       </Box>
     </Modal>

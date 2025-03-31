@@ -1,0 +1,52 @@
+{
+  "server": {
+    "port": 3010,
+    "host": "localhost"
+  },
+  "models": {
+    "default": {
+      "type": "sequential",
+      "config": {
+        "maxSteps": 10,
+        "timeoutMs": 30000
+      }
+    },
+    "problemSolver": {
+      "type": "sequential",
+      "config": {
+        "maxSteps": 15,
+        "timeoutMs": 60000,
+        "strategy": "depth-first"
+      }
+    },
+    "decisionMaker": {
+      "type": "sequential",
+      "config": {
+        "maxSteps": 8,
+        "timeoutMs": 20000,
+        "strategy": "breadth-first"
+      }
+    }
+  },
+  "logging": {
+    "level": "info",
+    "file": "logs/mcp.log"
+  },
+  "security": {
+    "apiKey": true,
+    "cors": {
+      "enabled": true,
+      "origin": "*"
+    }
+  },
+  "integration": {
+    "videoConference": {
+      "enabled": true,
+      "endpoint": "http://localhost:3008/api"
+    },
+    "mainApi": {
+      "enabled": true,
+      "endpoint": "http://localhost:3001/api"
+    }
+  }
+}

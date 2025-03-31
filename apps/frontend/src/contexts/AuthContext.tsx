@@ -17,6 +17,8 @@ export interface User {
   token?: string;
   firstName?: string;
   lastName?: string;
+  _id?: string;         // MongoDB ObjectId formatındaki ID
+  teacherId?: string;   // Alternatif öğretmen ID'si
 }
 
 // Auth context arayüzü

@@ -138,6 +138,39 @@ export class VideoSessionController {
     }
   }
 
+  @Put(':id/end')
+  @UseGuards(JwtAuthGuard)
+  async endSession(@Param('id') id: string): Promise<VideoSession> {
+    try {
+      console.log(`Ending video session with ID: ${id}`);
+      // LiveKit odasını kapat ve oturum durumunu güncelle
+      return await this.videoSessionService.endSession(id);
+    } catch (error) {
+      console.error(`Error ending video session: ${error.message}`);
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Failed to end video session: ${error.message}`);
+    }
+  }
+
+  @Put(':id/status')
+  @Public() 
+  async updateSessionStatus(
+    @Param('id') id: string,
+    @Body() body: { status: string },
+  ): Promise<VideoSession> {
+    try {
+      console.log(`Updating video session ${id} status to ${body.status}`);
+      return await this.videoSessionService.updateStatus(id, body.status as VideoSessionStatus);
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      throw new BadRequestException(`Failed to update video session status: ${error.message}`);
+    }
+  }
+
   @Get('teacher/:teacherId/pending')
   @Public() 
   async findPendingByTeacherId(@Param('teacherId') teacherId: string): Promise<VideoSession[]> {

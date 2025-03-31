@@ -1,6 +1,6 @@
 import { getAuthHeader } from './authService';
 
-const API_URL = process.env['REACT_APP_TEACHER_CONFERENCE_API_URL'] || 'http://localhost:3006/api';
+const API_URL = 'http://localhost:3006/api';
 
 export interface TeacherConference {
   _id: string;
@@ -58,17 +58,19 @@ export const getTeacherConferenceById = async (id: string): Promise<TeacherConfe
     const response = await fetch(`${API_URL}/teacher-conferences/${id}`, {
       headers: { ...(getAuthHeader() as Record<string, string>) },
     });
+    
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const data = await response.json();
+    
+    const teacher = await response.json();
     return {
-      ...data,
-      id: data._id, 
-      name: `${data.firstName} ${data.lastName}` 
+      ...teacher,
+      id: teacher._id,
+      name: `${teacher.firstName} ${teacher.lastName}`
     };
   } catch (error: any) {
-    console.error('Error fetching teacher conference:', error);
+    console.error(`Error fetching teacher conference with ID ${id}:`, error);
     throw new Error(error.message || 'Failed to fetch teacher conference');
   }
 };

@@ -111,66 +111,106 @@ export class VideoSessionService {
   async startSession(sessionId: string, teacherName: string, studentName: string): Promise<VideoSession> {
     const session = await this.findById(sessionId);
     
-    if (session.status !== VideoSessionStatus.WAITING) {
+    console.log(`Checking session ${sessionId} status: ${session.status}`);
+    
+    // VideoSessionStatus.WAITING enum değeri 'waiting' (küçük harfle) olduğundan
+    // doğrudan string karşılaştırması yapalım
+    if (session.status !== 'waiting') {
       throw new BadRequestException(`Session is already ${session.status}`);
     }
     
-    // Öğretmen için token oluştur
-    const teacherToken = this.liveKitService.generateToken(
-      session.roomName,
-      teacherName,
-      session.teacherId,
-      true
-    );
-    
-    // Oturumu güncelle
-    return this.videoSessionModel.findByIdAndUpdate(
-      sessionId,
-      {
-        status: VideoSessionStatus.ACTIVE,
-        startTime: new Date(),
-        roomToken: teacherToken
-      },
-      { new: true }
-    ).exec();
+    try {
+      console.log(`Starting session ${sessionId} with teacher ${teacherName}`);
+      
+      // Öğretmen için token oluştur
+      const teacherToken = this.liveKitService.generateToken(
+        session.roomName,
+        teacherName,
+        session.teacherId,
+        true
+      );
+      
+      // LiveKit odasının varlığını kontrol et, yoksa oluştur
+      try {
+        await this.liveKitService.createRoom(session.roomName);
+        console.log(`LiveKit room ${session.roomName} created or verified`);
+      } catch (error) {
+        console.log(`Room ${session.roomName} may already exist: ${error.message}`);
+        // Oda zaten varsa hata fırlatma, devam et
+      }
+      
+      // Oturumu güncelle - status değerini doğrudan string olarak belirt
+      const updatedSession = await this.videoSessionModel.findByIdAndUpdate(
+        sessionId,
+        {
+          status: 'active', // VideoSessionStatus.ACTIVE yerine doğrudan string kullan
+          startTime: new Date(),
+          roomToken: teacherToken
+        },
+        { new: true }
+      ).exec();
+      
+      console.log(`Session ${sessionId} successfully started and set to active`);
+      return updatedSession;
+    } catch (error) {
+      console.error(`Error starting session ${sessionId}: ${error.message}`);
+      throw new BadRequestException(`Failed to start session: ${error.message}`);
+    }
   }
 
   /**
    * Öğrenci için token oluşturur
    */
   async getStudentToken(sessionId: string, studentName: string): Promise<string> {
-    const session = await this.findById(sessionId);
-    
-    if (session.status !== VideoSessionStatus.ACTIVE) {
-      throw new BadRequestException(`Session is not active, current status: ${session.status}`);
+    try {
+      const session = await this.findById(sessionId);
+      
+      console.log(`Getting student token for session: ${sessionId}, status: ${session.status}`);
+      
+      // Oturum durumunu kontrol et - "active" veya "waiting" durumunda olmalı
+      // Büyük/küçük harf duyarsız karşılaştırma yapalım
+      const status = session.status.toLowerCase();
+      if (status !== 'active' && status !== 'waiting') {
+        throw new BadRequestException(`Session is not ready for student to join, current status: ${session.status}`);
+      }
+      
+      // Öğrenci için token oluştur
+      return this.liveKitService.generateToken(
+        session.roomName,
+        studentName,
+        session.studentId,
+        false
+      );
+    } catch (error) {
+      console.error(`Error generating student token: ${error.message}`);
+      throw new BadRequestException(`Failed to generate student token: ${error.message}`);
     }
-    
-    // Öğrenci için token oluştur
-    return this.liveKitService.generateToken(
-      session.roomName,
-      studentName,
-      session.studentId,
-      false
-    );
   }
 
   /**
    * Oturum durumunu günceller
    */
-  async updateStatus(sessionId: string, status: VideoSessionStatus): Promise<VideoSession> {
+  async updateStatus(sessionId: string, status: VideoSessionStatus | string): Promise<VideoSession> {
     const session = await this.findById(sessionId);
+    
+    console.log(`Updating session ${sessionId} status from ${session.status} to ${status}`);
     
     const updateData: any = { status };
     
-    if (status === VideoSessionStatus.COMPLETED) {
+    // Tamamlanma durumunda bitiş zamanını ayarla
+    if (status === VideoSessionStatus.COMPLETED || status === 'completed') {
       updateData.endTime = new Date();
+      console.log(`Session ${sessionId} completed, setting end time`);
     }
     
-    return this.videoSessionModel.findByIdAndUpdate(
+    const updatedSession = await this.videoSessionModel.findByIdAndUpdate(
       sessionId,
       updateData,
       { new: true }
     ).exec();
+    
+    console.log(`Session ${sessionId} status updated to ${updatedSession.status}`);
+    return updatedSession;
   }
 
   /**
@@ -198,6 +238,40 @@ export class VideoSessionService {
     
     if (!result) {
       throw new NotFoundException(`Video session with ID ${id} not found`);
+    }
+  }
+
+  /**
+   * Oturumu sonlandırır ve LiveKit odasını kapatır
+   */
+  async endSession(sessionId: string): Promise<VideoSession> {
+    try {
+      console.log(`Ending session with ID: ${sessionId}`);
+      const session = await this.findById(sessionId);
+      
+      if (session.status !== VideoSessionStatus.ACTIVE) {
+        throw new BadRequestException(`Session is not active, current status: ${session.status}`);
+      }
+      
+      // LiveKit odasını kapat
+      await this.liveKitService.deleteRoom(session.roomName);
+      console.log(`LiveKit room ${session.roomName} deleted successfully`);
+      
+      // Oturum durumunu güncelle
+      const updatedSession = await this.videoSessionModel.findByIdAndUpdate(
+        sessionId,
+        {
+          status: VideoSessionStatus.COMPLETED,
+          endTime: new Date()
+        },
+        { new: true }
+      ).exec();
+      
+      console.log(`Session ${sessionId} ended successfully`);
+      return updatedSession;
+    } catch (error) {
+      console.error(`Error ending session: ${error.message}`);
+      throw new BadRequestException(`Failed to end session: ${error.message}`);
     }
   }
 }

@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: video-conference-service
+  labels:
+    app: video-conference-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: video-conference-service
+  template:
+    metadata:
+      labels:
+        app: video-conference-service
+    spec:
+      containers:
+      - name: video-conference-service
+        image: video-conference-service:latest
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 3008
+        env:
+        - name: PORT
+          value: "3008"
+        - name: MONGODB_URI
+          valueFrom:
+            configMapKeyRef:
+              name: video-conference-service-config
+              key: mongodb-uri
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: video-conference-service-secrets
+              key: jwt-secret
+        - name: LIVEKIT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: video-conference-service-secrets
+              key: livekit-api-key
+        - name: LIVEKIT_API_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: video-conference-service-secrets
+              key: livekit-api-secret
+        - name: LIVEKIT_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: video-conference-service-config
+              key: livekit-host
+        resources:
+          limits:
+            cpu: "500m"
+            memory: "512Mi"
+          requests:
+            cpu: "100m"
+            memory: "256Mi"
