@@ -43,13 +43,23 @@ import {
   removeTeacherFromFavorites,
   isTeacherFavorite
 } from '../../services/teacherConferenceService';
-import { createVideoSession, checkPendingSessionsForTeacher, VideoSession } from '../../services/videoConferenceService';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { createVideoSession, checkPendingSessionsForTeacher, VideoSession, notifyTeacherAboutSession } from '../../services/videoConferenceService';
+import { VIDEO_CONFERENCE_API_URL } from '../../config';
 import { useAuth } from '../../contexts/AuthContext';
 import { UserType } from '../../types/user';
 import { createVideoConferencePayment, createReservationPayment } from '../../services/paymentService';
 import { getTeacherTimeSlots, bookTimeSlot } from '../../services/teacherCalendarService';
 import PaymentModal from '../../components/payment/PaymentModal';
 import { format } from 'date-fns';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import TeacherCalendar, { TimeSlot as BaseTimeSlot } from '../../components/calendar/TeacherCalendar';
+
+// TimeSlot tipini genişlet
+interface TimeSlot extends BaseTimeSlot {
+  teacherId?: string;  // Opsiyonel yapıyoruz çünkü orijinal tipte yok
+  hourlyRate?: number; // Opsiyonel yapıyoruz çünkü orijinal tipte yok
+}
 
 interface TabPanelProps {
   children?: React.ReactNode;
@@ -77,31 +87,18 @@ function TabPanel(props: TabPanelProps) {
   );
 }
 
-// TimeSlot arayüzü
-interface TimeSlot {
-  id: string;
-  teacherId: string;
-  date: Date | string;
-  startTime: Date | string;
-  endTime: Date | string;
-  isBooked: boolean;
-  studentId?: string;
-  studentName?: string;
-  hourlyRate: number;
-}
-
 // TeacherCalendar'dan gelen TimeSlot tipini bizim TimeSlot tipimize dönüştüren yardımcı fonksiyon
 const convertToTimeSlot = (slot: any): TimeSlot => {
   return {
     id: slot.id,
-    teacherId: slot.teacherId,
+    teacherId: slot.teacherId || '', // Opsiyonel olduğu için, yoksa boş string olarak ayarla
     date: slot.date,
     startTime: slot.startTime,
     endTime: slot.endTime,
     isBooked: slot.isBooked,
     studentId: slot.studentId,
     studentName: slot.studentName,
-    hourlyRate: slot.hourlyRate || 0
+    hourlyRate: slot.hourlyRate || 0 // Opsiyonel olduğu için, yoksa 0 olarak ayarla
   };
 };
 
@@ -165,7 +162,7 @@ const AvailabilityList = ({
                         <IconButton 
                           edge="end" 
                           color="primary" 
-                          onClick={() => onBookTimeSlot(slot.id, slot.hourlyRate)}
+                          onClick={() => onBookTimeSlot(slot.id, slot.hourlyRate || 0)}
                           title="Bu zaman dilimini rezerve et"
                         >
                           <BookmarkAddIcon />
@@ -217,6 +214,7 @@ const TeacherDetailPage: React.FC = () => {
   const [paymentCurrency, setPaymentCurrency] = useState<string>('try');
   const [paymentType, setPaymentType] = useState<'video_conference' | 'reservation'>('video_conference');
   const [reservationIdForPayment, setReservationIdForPayment] = useState<string | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [paymentSuccess, setPaymentSuccess] = useState(false);
   const [snackbarOpen, setSnackbarOpen] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
@@ -253,58 +251,113 @@ const TeacherDetailPage: React.FC = () => {
   
   // Öğretmen için bekleyen video konferans isteklerini kontrol et
   useEffect(() => {
+    let isSubscribed = true; // Component unmount edildiğinde state güncellemeyi önler
+    let pollingInterval: NodeJS.Timeout;
+
     const checkPendingVideoSessions = async () => {
-      if (!user || !teacher) return;
+      if (!user || !teacher || !isSubscribed) return;
       
       try {
-        // Öğretmen ID'lerini kontrol et
-        const teacherIds: string[] = [];
+        // Öğretmen ID'sini doğru şekilde belirle
+        const teacherId = teacher.id || teacher._id || teacher.teacherId;
         
-        // Mevcut ID'leri ekle
-        if (teacher.id) teacherIds.push(teacher.id);
-        if (teacher._id) teacherIds.push(teacher._id as string);
-        if (teacher.teacherId) teacherIds.push(teacher.teacherId as string);
-        
-        console.log('TeacherDetailPage: Checking pending sessions with teacher IDs:', teacherIds);
-        
-        if (teacherIds.length === 0) {
+        if (!teacherId) {
           console.error('TeacherDetailPage: Öğretmen ID bulunamadı:', teacher);
           return;
         }
         
-        // Her bir ID için bekleyen oturumları kontrol et
+        console.log(`TeacherDetailPage: Checking pending sessions for teacher ID: ${teacherId}`);
+        
         let allSessions: VideoSession[] = [];
         
-        for (const id of teacherIds) {
-          console.log(`TeacherDetailPage: Checking pending sessions for teacher ID: ${id}`);
+        // İki farklı API endpoint'inden oturum bilgilerini al
+        try {
+          // 1. Normal video oturumları
+          const sessions = await checkPendingSessionsForTeacher(teacherId);
+          console.log(`TeacherDetailPage: Received ${sessions.length} pending sessions from checkPendingSessionsForTeacher:`, sessions);
+          allSessions = [...allSessions, ...sessions];
+          
+          // 2. LiveKit Proxy API'sinden doğrudan
           try {
-            const sessions = await checkPendingSessionsForTeacher(id);
-            console.log(`TeacherDetailPage: Received ${sessions.length} pending sessions for ID ${id}:`, sessions);
-            allSessions = [...allSessions, ...sessions];
-          } catch (error: any) {
-            console.error(`TeacherDetailPage: Error checking pending sessions for ID ${id}:`, error);
+            const directResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending`);
+            if (directResponse.ok) {
+              const directSessions = await directResponse.json();
+              console.log(`TeacherDetailPage: Received ${directSessions.length} pending sessions from direct API call:`, directSessions);
+              
+              // İki array'i birleştirirken tekrarlanan oturumları filtrele
+              directSessions.forEach((session: VideoSession) => {
+                if (!allSessions.some(s => (s._id || s.id) === (session._id || session.id))) {
+                  allSessions.push(session);
+                }
+              });
+            }
+          } catch (directApiError) {
+            console.warn('TeacherDetailPage: Error getting sessions from direct API:', directApiError);
           }
+          
+          // Hiç oturum bulunamazsa, API cache olmayan doğrudan bir sorgu yap
+          if (allSessions.length === 0) {
+            try {
+              const forceResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?force=true&t=${Date.now()}`);
+              if (forceResponse.ok) {
+                const forceSessions = await forceResponse.json();
+                console.log(`TeacherDetailPage: Received ${forceSessions.length} pending sessions from force refresh:`, forceSessions);
+                allSessions = [...allSessions, ...forceSessions];
+              }
+            } catch (forceError) {
+              console.warn('TeacherDetailPage: Error getting sessions from force refresh:', forceError);
+            }
+          }
+          
+          if (!isSubscribed) return; // Component unmount edildiyse state'i güncelleme
+          
+          console.log(`TeacherDetailPage: Final total pending sessions: ${allSessions.length}`);
+          
+          // Bekleyen oturumları state'e kaydet
+          setPendingVideoSessions(allSessions);
+          
+          // Bekleyen oturumlar varsa ve önceki state'te yoktuysa bildirim göster
+          if (allSessions.length > 0) {
+            // Yeni gelen oturumların sayısını belirle
+            const previousSessionIds = pendingVideoSessions.map(s => (s._id || s.id));
+            const newSessions = allSessions.filter(s => !previousSessionIds.includes(s._id || s.id));
+            
+            if (newSessions.length > 0) {
+              // Yeni oturumlar varsa bildirim göster
+              setSnackbarMessage(`${newSessions.length} adet yeni video konferans isteği var! Lütfen kontrol ediniz.`);
+              setSnackbarSeverity('warning');
+              setSnackbarOpen(true);
+              
+              // Bildirim sesi çal
+              try {
+                const audio = new Audio('/notification.mp3');
+                audio.play().catch(e => console.warn('Notification sound could not be played:', e));
+              } catch (soundError) {
+                console.warn('Error playing notification sound:', soundError);
+              }
+            }
+          }
+        } catch (error: any) {
+          console.error(`TeacherDetailPage: Error checking pending sessions:`, error);
         }
-        
-        // Tekrarlanan oturumları filtrele
-        const uniqueSessions = allSessions.filter((session, index, self) => 
-          index === self.findIndex(s => s._id === session._id)
-        );
-        
-        console.log(`TeacherDetailPage: Total unique pending sessions: ${uniqueSessions.length}`);
-        setPendingVideoSessions(uniqueSessions);
         
       } catch (error) {
         console.error('Error checking pending video sessions:', error);
       }
     };
     
-    // Sayfa yüklendiğinde ve her 5 saniyede bir kontrol et
+    // İlk çağrı - sayfa yüklendiğinde
     checkPendingVideoSessions();
-    const interval = setInterval(checkPendingVideoSessions, 5000);
     
-    return () => clearInterval(interval);
-  }, [teacher, user]);
+    // Polling interval - her 2 saniyede bir kontrol et (daha hızlı yaptık)
+    pollingInterval = setInterval(checkPendingVideoSessions, 2000);
+    
+    // Cleanup function
+    return () => {
+      isSubscribed = false;
+      clearInterval(pollingInterval);
+    };
+  }, [teacher, user, pendingVideoSessions]);
   
   useEffect(() => {
     if (!teacher) return;
@@ -605,7 +658,7 @@ const TeacherDetailPage: React.FC = () => {
           <Box sx={{ mt: 2 }}>
             {pendingVideoSessions.map((session) => (
               <Box 
-                key={session._id} 
+                key={(session._id || session.id)} 
                 sx={{ 
                   display: 'flex', 
                   justifyContent: 'space-between', 
@@ -628,7 +681,7 @@ const TeacherDetailPage: React.FC = () => {
                   variant="contained" 
                   color="primary"
                   startIcon={<VideoCallIcon />}
-                  onClick={() => navigate(`/video-conference/${session._id}`)}
+                  onClick={() => navigate(`/video-conference/${session._id || session.id}`)}
                 >
                   Katıl
                 </Button>

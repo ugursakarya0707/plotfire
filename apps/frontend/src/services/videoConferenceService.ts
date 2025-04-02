@@ -4,34 +4,64 @@ import { VIDEO_CONFERENCE_API_URL } from '../config';
 // Yeni bir video oturumu başlatma
 export const createVideoSession = async (teacherId: string, studentId: string): Promise<VideoSession> => {
   try {
-    console.log(`Creating video session with teacherId: ${teacherId}, studentId: ${studentId}`);
+    console.log(`Creating video session for teacher: ${teacherId}, student: ${studentId}`);
     
-    // İstek gövdesi
-    const requestBody = {
-      teacherId,
-      studentId,
-      // status alanını kaldırdık çünkü backend bunu kabul etmiyor
-    };
+    // Önce mevcut kullanıcının (öğrenci) bilgilerini al
+    const userData = localStorage.getItem('user');
+    let studentName = 'Anonim Öğrenci';
     
-    console.log('Request body:', requestBody);
+    if (userData) {
+      const user = JSON.parse(userData);
+      studentName = user.username || user.email || 'Anonim Öğrenci';
+    }
     
     const response = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        // Public endpoint olduğu için kimlik doğrulama başlığını kaldırdık
+        ...(getAuthHeader() as Record<string, string>),
       },
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({
+        teacherId,
+        studentId,
+        studentName
+      }),
     });
     
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`HTTP error! status: ${response.status}, response: ${errorText}`);
+      console.error(`Create session error: Status ${response.status}, Response:`, errorText);
       throw new Error(`HTTP error! status: ${response.status}`);
     }
     
     const data = await response.json();
-    console.log('Created video session:', data);
+    console.log('Video session created successfully:', data);
+    
+    // Oturum oluşturulduktan sonra, öğretmene bildir
+    try {
+      // Öğretmene bildirim gönder
+      await notifyTeacherAboutSession(teacherId, data._id || data.id, 'session_created');
+      
+      // Ayrıca yeni eklediğimiz register endpoint'ini de kullan
+      await fetch(`${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: data._id || data.id,
+          teacherId,
+          studentId,
+          studentName,
+          action: 'session_created'
+        }),
+      });
+      
+      console.log(`Teacher ${teacherId} notified about new session ${data._id || data.id}`);
+    } catch (notifyError) {
+      console.warn('Could not notify teacher, but continuing with session creation:', notifyError);
+    }
+    
     return data;
   } catch (error: any) {
     console.error('Error creating video session:', error);
@@ -74,20 +104,77 @@ export const checkPendingSessionsForTeacher = async (teacherId: string): Promise
   try {
     console.log(`Checking pending sessions for teacher: ${teacherId}`);
     
-    // MongoDB ObjectId formatı kontrolü (24 karakter uzunluğunda hex string)
+    // TeacherId'nin formatını kontrol et - daha güvenli API çağrıları için
     const isMongoId = /^[0-9a-fA-F]{24}$/.test(teacherId);
     const isUUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/.test(teacherId);
     
     console.log(`Teacher ID format: ${isMongoId ? 'MongoDB ObjectId' : (isUUID ? 'UUID' : 'Unknown')}`);
     
+    if (!teacherId || (!isMongoId && !isUUID)) {
+      console.error('Invalid teacher ID format, cannot check pending sessions');
+      return [];
+    }
+    
+    // API çağrısı yap - daha kısa timeout ile
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 saniye timeout
+    
+    // 1. Önce doğrudan LiveKit proxy üzerinden gerçek oturumları al
+    // Bu, öğrenciler tarafından başlatılan gerçek istekleri içerir
+    try {
+      const proxyResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/livekit-proxy/teacher-sessions/${teacherId}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+          ...(getAuthHeader() as Record<string, string>),
+        },
+        signal: controller.signal
+      });
+      
+      if (proxyResponse.ok) {
+        const proxyData = await proxyResponse.json();
+        console.log('LiveKit proxy sessions:', proxyData);
+        
+        if (proxyData && Array.isArray(proxyData.sessions) && proxyData.sessions.length > 0) {
+          // Proxy'dan dönen gerçek oturumları hemen dön
+          clearTimeout(timeoutId);
+          console.log(`Found ${proxyData.sessions.length} real pending sessions via proxy`);
+          return proxyData.sessions;
+        }
+      }
+    } catch (proxyError) {
+      console.warn('Error fetching from proxy (continuing with fallback):', proxyError);
+    }
+    
+    // 2. Proxy çalışmazsa veya oturum bulunamazsa, eski API'yi dene
     const response = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending`, {
-      // Public endpoint olduğu için kimlik doğrulama başlığını kaldırdık
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        ...(getAuthHeader() as Record<string, string>),
+      },
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId); // Timeout'u temizle
     
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`HTTP error! status: ${response.status}, response: ${errorText}`);
-      throw new Error(`HTTP error! status: ${response.status}`);
+      
+      // 3. İkinci yöntem de başarısız olursa, localStorage'daki oturumları dene
+      try {
+        const cachedSessionsStr = localStorage.getItem('teacher_pending_sessions');
+        if (cachedSessionsStr) {
+          const cachedSessions = JSON.parse(cachedSessionsStr);
+          console.log('Using cached sessions:', cachedSessions);
+          return cachedSessions.filter((session: VideoSession) => session.teacherId === teacherId);
+        }
+      } catch (cacheError) {
+        console.warn('Error reading cached sessions:', cacheError);
+      }
+      
+      return [];
     }
     
     const sessions = await response.json();
@@ -98,17 +185,51 @@ export const checkPendingSessionsForTeacher = async (teacherId: string): Promise
       return [];
     }
     
-    // Oturumları filtrele ve sadece 'waiting' durumundakileri döndür
+    // Oturumları filtrele ve sadece 'waiting' veya 'WAITING' durumundakileri döndür
+    // Büyük/küçük harf duyarlılığını ortadan kaldırmak için toLowerCase() kullan
     const pendingSessions = sessions.filter((session: VideoSession) => {
+      if (!session || !session.status) {
+        console.warn('Invalid session object:', session);
+        return false;
+      }
+      
+      // Bu oturumlar için öğretmen ID'sini doğrula
+      // Yalnızca ilgili öğretmen için olan oturumları göster
+      if (session.teacherId !== teacherId) {
+        console.log(`Filtering out session ${session._id} - wrong teacher ID: ${session.teacherId} vs expected ${teacherId}`);
+        return false;
+      }
+      
       console.log(`Session ${session._id} status: "${session.status}", isActive: ${session.isActive}`);
-      return (session.status.toLowerCase() === 'waiting' && session.isActive);
+      const status = session.status.toLowerCase();
+      return (status === 'waiting' && session.isActive);
     });
     
     console.log(`Filtered ${pendingSessions.length} pending sessions out of ${sessions.length} total`);
+    
+    // Bekleyen oturumlar varsa konsola detayları yazdır
+    if (pendingSessions.length > 0) {
+      console.log('Pending sessions details:', pendingSessions);
+      
+      // Gelecekte kullanmak üzere localStorage'a kaydet
+      try {
+        localStorage.setItem('teacher_pending_sessions', JSON.stringify(pendingSessions));
+      } catch (cacheError) {
+        console.warn('Error caching sessions:', cacheError);
+      }
+    }
+    
     return pendingSessions;
   } catch (error: any) {
-    console.error('Error checking pending sessions:', error);
-    throw new Error(error.message || 'Failed to check pending sessions');
+    // AbortError olup olmadığını kontrol et (timeout durumu)
+    if (error.name === 'AbortError') {
+      console.warn('API timeout while checking pending sessions for teacher');
+    } else {
+      console.error('Error checking pending sessions:', error);
+    }
+    
+    // Hata durumunda boş dizi döndür, böylece uygulama çökmez
+    return [];
   }
 };
 
@@ -276,59 +397,97 @@ export const joinVideoSessionAsTeacher = async (
     const roomName = sessionId;
     console.log(`Teacher using room name: ${roomName} (direct sessionId)`);
     
-    // Öğretmen için token al ve oturumu başlat
-    const response = await fetch(
-      `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&studentName=Waiting&roomName=${encodeURIComponent(roomName)}`,
-      {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`Teacher join session error: Status ${response.status}, Response:`, errorText);
+    try {
+      // Öğretmen için LiveKit token al
+      const tokenResponse = await fetch(
+        `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/token`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            roomName: roomName,
+            participantName: teacherName,
+            isTeacher: true
+          }),
+        }
+      );
       
-      // Eğer oturum zaten aktifse, öğretmen için token al
-      if (response.status === 400 && errorText.includes('already active')) {
-        console.log('Session already active, getting teacher token');
-        const activeSession = await getActiveSessionDetails(sessionId);
+      if (!tokenResponse.ok) {
+        const tokenErrorText = await tokenResponse.text();
+        console.error(`Teacher token error: Status ${tokenResponse.status}, Response:`, tokenErrorText);
+        throw new Error(`HTTP error! status: ${tokenResponse.status}`);
+      }
+      
+      const tokenData = await tokenResponse.json();
+      console.log('Teacher token obtained successfully');
+      
+      // Oturumu başlat veya güncelle
+      const response = await fetch(
+        `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&roomName=${encodeURIComponent(roomName)}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Teacher join session error: Status ${response.status}, Response:`, errorText);
         
-        // Öğretmen için doğrudan token al
-        const tokenResponse = await fetch(
-          `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/teacher-token?teacherName=${encodeURIComponent(teacherName)}&roomName=${encodeURIComponent(roomName)}`,
-          {
-            method: 'GET',
-            headers: {
-              'Accept': 'application/json',
-            },
-          }
-        );
-        
-        if (!tokenResponse.ok) {
-          const tokenErrorText = await tokenResponse.text();
-          console.error(`Teacher token error: Status ${tokenResponse.status}, Response:`, tokenErrorText);
-          throw new Error(`HTTP error! status: ${tokenResponse.status}`);
+        // Eğer oturum zaten aktifse, sadece token ile devam et
+        if (response.status === 400 && errorText.includes('already active')) {
+          console.log('Session is already active, continuing with token only');
+          
+          const activeSession = await getActiveSessionDetails(sessionId);
+          activeSession.roomToken = tokenData.token;
+          
+          return activeSession;
         }
         
-        const tokenData = await tokenResponse.json();
-        activeSession.roomToken = tokenData.token;
-        
-        return activeSession;
+        throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      throw new Error(`HTTP error! status: ${response.status}`);
+      const data = await response.json();
+      console.log('Teacher joined successfully:', data);
+      
+      // Aldığımız token'ı data nesnesine ekle
+      data.roomToken = tokenData.token;
+      
+      // Oturumu aktif olarak işaretle
+      await updateSessionStatus(sessionId, 'ACTIVE');
+      
+      return data;
+    } catch (tokenError) {
+      console.error('Token error, falling back to traditional method:', tokenError);
+      
+      // Eski yöntem - doğrudan session/start endpoint'i
+      const response = await fetch(
+        `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&studentName=Waiting&roomName=${encodeURIComponent(roomName)}`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Backup teacher join error: Status ${response.status}, Response:`, errorText);
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Teacher joined with backup method:', data);
+      
+      // Oturumu aktif olarak işaretle
+      await updateSessionStatus(sessionId, 'ACTIVE');
+      
+      return data;
     }
-    
-    const data = await response.json();
-    console.log('Teacher joined successfully:', data);
-    
-    // Oturumu aktif olarak işaretle
-    await updateSessionStatus(sessionId, 'ACTIVE');
-    
-    return data;
   } catch (error: any) {
     console.error('Error joining video session as teacher:', error);
     throw new Error(error.message || 'Failed to join video session as teacher');
@@ -361,9 +520,9 @@ export const updateSessionStatus = async (sessionId: string, status: string): Pr
   }
 };
 
-// Öğrenci olarak video oturumuna katılma
+// Öğrenci olarak video konferansa katıl
 export const joinVideoSessionAsStudent = async (
-  sessionId: string, 
+  sessionId: string,
   studentName: string
 ): Promise<string> => {
   try {
@@ -385,14 +544,18 @@ export const joinVideoSessionAsStudent = async (
     const roomName = sessionId;
     console.log(`Student using room name: ${roomName} (direct sessionId)`);
     
-    // Öğrenci için token al
+    // Öğrenci için token al - LiveKit proxy servisini kullan
     const response = await fetch(
-      `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/student-token?studentName=${encodeURIComponent(studentName)}&roomName=${encodeURIComponent(roomName)}`,
-      {
-        method: 'GET',
+      `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/token`, {
+        method: 'POST',
         headers: {
-          'Accept': 'application/json',
+          'Content-Type': 'application/json',
         },
+        body: JSON.stringify({
+          roomName: roomName,
+          participantName: studentName,
+          isTeacher: false
+        }),
       }
     );
     
@@ -408,14 +571,110 @@ export const joinVideoSessionAsStudent = async (
     // Oturum durumunu güncelle
     try {
       await updateSessionStatus(sessionId, 'ACTIVE');
+      
+      // Öğretmene bildirim gönder - öğretmenin bekleyen oturumları yenilemesini sağla
+      try {
+        // Öğretmen ID'si varsa, öğretmene bildirim gönder
+        if (currentSession.teacherId) {
+          await notifyTeacherAboutSession(currentSession.teacherId, sessionId);
+          
+          // Ayrıca register endpoint'ini de kullan
+          await fetch(`${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              sessionId: sessionId,
+              teacherId: currentSession.teacherId,
+              studentId: currentSession.studentId,
+              action: 'student_joined'
+            }),
+          });
+        } else {
+          console.warn('Teacher ID not found in session, cannot notify teacher');
+        }
+      } catch (notifyError) {
+        console.warn('Could not notify teacher, but continuing:', notifyError);
+      }
     } catch (updateError) {
-      console.warn('Could not update session status, but continuing:', updateError);
+      console.error('Error updating session status:', updateError);
+      // Oturum durumu güncellenemese bile devam et
     }
     
     return data.token;
   } catch (error: any) {
     console.error('Error joining video session as student:', error);
     throw new Error(error.message || 'Failed to join video session as student');
+  }
+};
+
+// Öğretmene bildirim gönder
+export const notifyTeacherAboutSession = async (teacherId: string, sessionId: string, action: string = 'student_joined'): Promise<void> => {
+  try {
+    console.log(`Notifying teacher ${teacherId} about session ${sessionId}, action: ${action}`);
+    
+    // UUID formatını kontrol et - MongoDB ObjectID için uyumluluk kontrolü ekle
+    if (!teacherId) {
+      console.error('Teacher ID is missing, cannot notify teacher');
+      return;
+    }
+    
+    // Bildirim stratejileri - sırayla dene
+    const endpoints = [
+      // 1. Ana bildirim yöntemi
+      {
+        url: `${VIDEO_CONFERENCE_API_URL}/video-sessions/notify-teacher`,
+        method: 'POST',
+        body: { teacherId, sessionId, action }
+      },
+      // 2. Alternatif: LiveKit proxy register endpoint
+      {
+        url: `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`,
+        method: 'POST',
+        body: { teacherId, sessionId, studentId: 'auto', action }
+      },
+      // 3. Son çare: video-conference modülü
+      {
+        url: `${VIDEO_CONFERENCE_API_URL}/video-conference/livekit/notify-teacher`,
+        method: 'POST',
+        body: { teacherId, sessionId, action }
+      }
+    ];
+    
+    let success = false;
+    
+    // Her endpoint'i sırayla dene
+    for (const endpoint of endpoints) {
+      try {
+        console.log(`Trying notification endpoint: ${endpoint.url}`);
+        const response = await fetch(endpoint.url, {
+          method: endpoint.method,
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(endpoint.body),
+        });
+        
+        if (response.ok) {
+          console.log(`Teacher notification successful via ${endpoint.url}`);
+          success = true;
+          break;
+        } else {
+          const errorText = await response.text();
+          console.warn(`Notification failed for ${endpoint.url}: ${response.status} - ${errorText}`);
+        }
+      } catch (error) {
+        console.warn(`Error with endpoint ${endpoint.url}:`, error);
+      }
+    }
+    
+    if (!success) {
+      console.warn('All notification methods failed, but continuing. Teacher may not see this session in their dashboard.');
+    }
+  } catch (error: any) {
+    console.error('Error in notification process:', error);
+    // Kritik değil - devam et
   }
 };
 
@@ -444,7 +703,8 @@ export const getActiveSessionDetails = async (sessionId: string): Promise<VideoS
 };
 
 export interface VideoSession {
-  _id: string;
+  _id?: string;
+  id?: string;
   teacherId: string;
   studentId: string;
   roomName: string;

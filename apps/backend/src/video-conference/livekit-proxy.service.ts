@@ -67,30 +67,86 @@ export class LiveKitProxyService {
   }
   
   /**
-   * Oda yoksa oluşturur
+   * Oda oluştur (yoksa)
    */
-  private async createRoomIfNotExists(roomName: string): Promise<Room> {
+  async createRoomIfNotExists(roomName: string, metadata?: any): Promise<any> {
     try {
-      // Odayı kontrol et
-      const rooms = await this.roomService.listRooms();
-      const existingRoom = rooms.find(room => room.name === roomName);
+      this.logger.log(`Checking if room exists: ${roomName}`);
       
-      if (existingRoom) {
-        this.logger.log(`Room ${roomName} already exists`);
-        return existingRoom;
+      // Odayı bulmayı dene
+      let found = false;
+      try {
+        const rooms = await this.roomService.listRooms();
+        found = rooms.some(room => room.name === roomName);
+      } catch (listError) {
+        this.logger.warn(`Error listing rooms: ${listError.message}`);
       }
       
       // Oda yoksa oluştur
-      const room = await this.roomService.createRoom({
-        name: roomName,
-        emptyTimeout: 60 * 60, // 1 saat
-        maxParticipants: 10,
-      });
+      if (!found) {
+        this.logger.log(`Room ${roomName} does not exist, creating new room`);
+        
+        // Metadata'yı oluştur
+        const roomMetadata = metadata ? JSON.stringify(metadata) : JSON.stringify({
+          createdAt: new Date().toISOString()
+        });
+        
+        // Odayı oluştur
+        await this.roomService.createRoom({
+          name: roomName,
+          emptyTimeout: 10 * 60, // 10 dakika
+          maxParticipants: 2,    // Öğretmen ve öğrenci
+          metadata: roomMetadata
+        });
+        
+        this.logger.log(`Room ${roomName} created successfully with metadata: ${roomMetadata}`);
+        
+        // MCP'deki oturum verisini de güncelle
+        if (metadata && metadata.sessionId) {
+          try {
+            await this.mcpService.updateVideoSessionData(metadata.sessionId, {
+              roomName,
+              ...metadata,
+              updatedAt: new Date().toISOString()
+            });
+            this.logger.log(`Updated MCP session data for ${metadata.sessionId}`);
+          } catch (mcpError) {
+            this.logger.warn(`Error updating MCP session: ${mcpError.message}`);
+          }
+        }
+        
+        return { created: true, name: roomName, metadata: roomMetadata };
+      }
       
-      this.logger.log(`Created new room: ${roomName}`);
-      return room;
+      // Oda mevcutsa, metadata'yı güncelle
+      if (metadata) {
+        try {
+          const roomMetadata = JSON.stringify(metadata);
+          await this.roomService.updateRoomMetadata(roomName, roomMetadata);
+          this.logger.log(`Updated metadata for existing room ${roomName}`);
+          
+          // MCP'deki oturum verisini de güncelle
+          if (metadata.sessionId) {
+            try {
+              await this.mcpService.updateVideoSessionData(metadata.sessionId, {
+                roomName,
+                ...metadata,
+                updatedAt: new Date().toISOString()
+              });
+              this.logger.log(`Updated MCP session data for ${metadata.sessionId}`);
+            } catch (mcpError) {
+              this.logger.warn(`Error updating MCP session: ${mcpError.message}`);
+            }
+          }
+        } catch (updateError) {
+          this.logger.warn(`Error updating room metadata: ${updateError.message}`);
+        }
+      }
+      
+      this.logger.log(`Room ${roomName} already exists`);
+      return { created: false, name: roomName };
     } catch (error) {
-      this.logger.error(`Error creating room: ${error.message}`, error.stack);
+      this.logger.error(`Error creating/checking room: ${error.message}`, error.stack);
       throw error;
     }
   }
@@ -236,15 +292,49 @@ export class LiveKitProxyService {
   }
   
   /**
-   * Odayı sonlandırır
+   * Video konferans oturumunu sonlandırır
    */
-  async endSession(roomName: string): Promise<void> {
+  async endSession(sessionId: string, reason: string = 'normal end'): Promise<any> {
     try {
-      await this.roomService.deleteRoom(roomName);
-      this.logger.log(`Room ${roomName} deleted`);
+      this.logger.log(`Ending LiveKit session: ${sessionId}, reason: ${reason}`);
+      
+      // Odayı bul
+      const rooms = await this.roomService.listRooms();
+      const matchingRoom = rooms.find(room => room.name === sessionId);
+      
+      // Oda varsa kapat
+      if (matchingRoom) {
+        this.logger.log(`Found room ${sessionId}, now ending session`);
+        await this.roomService.deleteRoom(sessionId);
+        this.logger.log(`Room ${sessionId} closed successfully`);
+        
+        // MCP servisine oturumun kapandığını bildir
+        try {
+          await this.mcpService.updateVideoSessionStatus(sessionId, 'COMPLETED');
+          this.logger.log(`Session ${sessionId} status updated to COMPLETED`);
+        } catch (error) {
+          this.logger.warn(`Failed to update session status: ${error.message}`);
+        }
+        
+        return {
+          success: true,
+          message: `Session ${sessionId} ended successfully`,
+          reason
+        };
+      } else {
+        this.logger.warn(`Room ${sessionId} not found, nothing to end`);
+        return {
+          success: false,
+          message: `Session ${sessionId} not found`,
+          reason
+        };
+      }
     } catch (error) {
-      this.logger.error(`Error ending session: ${error.message}`, error.stack);
-      throw error;
+      this.logger.error(`Error ending session: ${error.message}`);
+      throw new HttpException(
+        `Failed to end session: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
   
@@ -342,38 +432,25 @@ export class LiveKitProxyService {
       const rooms = await this.roomService.listRooms();
       this.logger.log(`Available rooms: ${rooms.map(r => r.name).join(', ')}`);
       
+      // Oda adı olarak doğrudan sessionId kullan
       let roomName = sessionId;
       
-      // Eğer öğretmense, önce doğrudan sessionId ile oda var mı diye kontrol et, sonra öğrencinin bulunduğu odayı bul
-      if (isTeacher) {
-        // Önce doğrudan sessionId ile oda var mı diye kontrol et
-        const directRoom = rooms.find(r => r.name === sessionId);
-        
-        if (directRoom) {
-          roomName = directRoom.name;
-          this.logger.log(`Teacher joining room with direct sessionId: ${roomName}`);
-        } else {
-          // Öğrenci formatındaki oda adını ara (room_XXXX formatı)
-          const studentRoom = rooms.find(r => 
-            r.name.includes(`room_`) && r.name.includes(sessionId)
-          );
-          
-          if (studentRoom) {
-            roomName = studentRoom.name;
-            this.logger.log(`Teacher joining student's room: ${roomName}`);
-          } else {
-            this.logger.log(`No student room found, using default room name: ${roomName}`);
-          }
-        }
+      // Mevcut odayı bul
+      const existingRoom = rooms.find(r => r.name === sessionId);
+      
+      if (existingRoom) {
+        this.logger.log(`Found matching room: ${existingRoom.name}`);
       } else {
-        // Öğrenci için oda adı olarak doğrudan sessionId kullan
-        // Geriye uyumluluk için eski formatı kontrol et, ancak yeni oturumlar için sessionId kullan
-        const existingRoom = rooms.find(r => r.name === sessionId);
+        // Geriye uyumluluk için eski formatlı odaları kontrol et
+        const legacyRoom = rooms.find(r => 
+          r.name.includes(`room_`) && r.name.includes(sessionId)
+        );
         
-        if (existingRoom) {
-          this.logger.log(`Student joining existing room with sessionId: ${roomName}`);
+        if (legacyRoom) {
+          roomName = legacyRoom.name;
+          this.logger.log(`Using legacy room name: ${roomName}`);
         } else {
-          this.logger.log(`Student creating new room with sessionId: ${roomName}`);
+          this.logger.log(`Using room name: ${roomName} (direct sessionId)`);
         }
       }
       
@@ -461,5 +538,316 @@ export class LiveKitProxyService {
       this.logger.error(`Error applying MCP solution: ${error.message}`, error.stack);
       throw error;
     }
+  }
+  
+  /**
+   * Belirtilen oda adıyla LiveKit'te bir oda var mı kontrol eder
+   */
+  async checkRoomExists(roomName: string): Promise<boolean> {
+    try {
+      const rooms = await this.roomService.listRooms();
+      
+      // Mevcut odaları logla
+      const roomNames = rooms.map(room => room.name).join(', ');
+      this.logger.log(`Available rooms: ${roomNames}`);
+      
+      // Eşleşen odayı bul
+      const matchingRoom = rooms.find(room => room.name === roomName);
+      
+      if (matchingRoom) {
+        this.logger.log(`Found matching room: ${matchingRoom.name}`);
+        return true;
+      } else {
+        this.logger.log(`No matching room found for: ${roomName}`);
+        return false;
+      }
+    } catch (error) {
+      this.logger.error(`Error checking if room exists: ${error.message}`, error.stack);
+      return false;
+    }
+  }
+  
+  /**
+   * LiveKit'teki tüm aktif odaları listeler
+   */
+  async listActiveRooms(): Promise<Room[]> {
+    try {
+      const rooms = await this.roomService.listRooms();
+      this.logger.log(`Retrieved ${rooms.length} active rooms from LiveKit Cloud`);
+      return rooms;
+    } catch (error) {
+      this.logger.error(`Error listing active rooms: ${error.message}`, error.stack);
+      return [];
+    }
+  }
+  
+  // Öğretmene bildirim gönderme metodu - LiveKit Controller tarafından çağrılır
+  async notifyTeacher(teacherId: string, sessionId: string, action: string = 'student_joined'): Promise<any> {
+    this.logger.log(`Notifying teacher ${teacherId} about session ${sessionId} with action ${action}`);
+    
+    try {
+      // 1. Oturumun durumunu kontrol et - aktif değilse aktif yap
+      await this.ensureSessionIsActive(sessionId);
+      
+      // 2. Öğretmen için mevcut oturumları güncelle
+      const pendingSession = {
+        _id: sessionId,
+        id: sessionId,
+        teacherId,
+        status: 'WAITING',
+        timestamp: new Date().toISOString(),
+        action
+      };
+      
+      // 3. MCP servisini kullanarak, öğretmen ID'si altında oturumu kaydet
+      try {
+        await this.mcpService.updateTeacherPendingSessions(teacherId, pendingSession);
+        this.logger.log(`Teacher ${teacherId} pending sessions updated with session ${sessionId}`);
+      } catch (error) {
+        this.logger.error(`Failed to update teacher pending sessions: ${error.message}`);
+      }
+      
+      // 4. LiveKit odasının varlığını doğrula
+      const exists = await this.checkRoomExists(sessionId);
+      if (!exists) {
+        await this.createRoomIfNotExists(sessionId);
+        this.logger.log(`Created room ${sessionId} for upcoming session`);
+      }
+      
+      return {
+        success: true,
+        message: `Teacher ${teacherId} notified about session ${sessionId}`,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      this.logger.error(`Error notifying teacher: ${error.message}`);
+      throw new HttpException(
+        `Failed to notify teacher: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+  
+  // Öğrenci oturumunu kaydetme metodu - LiveKit Controller tarafından çağrılır
+  async registerStudentSession(sessionId: string, teacherId: string, studentId: string, action: string = 'join'): Promise<any> {
+    this.logger.log(`Registering student ${studentId} for session ${sessionId} with teacher ${teacherId}`);
+    
+    try {
+      // 1. Önce LiveKit odasının varlığını kontrol et ve metadata'sını güncelle
+      const roomInfo = await this.checkRoomExists(sessionId);
+      
+      // Odanın metadata'sını hazırla
+      const metadata = {
+        sessionId,
+        teacherId,
+        studentId,
+        action,
+        timestamp: new Date().toISOString()
+      };
+      
+      if (roomInfo) {
+        // Mevcut oda bulundu, metadata'yı güncelle
+        await this.roomService.updateRoomMetadata(sessionId, JSON.stringify(metadata));
+        this.logger.log(`Updated metadata for existing room ${sessionId}`);
+      } else {
+        // Oda bulunamadı, yeni oda oluştur
+        await this.createRoomIfNotExists(sessionId, metadata);
+        this.logger.log(`Created new room ${sessionId} with metadata`);
+      }
+      
+      // 2. Oturumun durumunu kontrol et - aktif değilse aktif yap
+      await this.ensureSessionIsActive(sessionId);
+      
+      // 3. Öğretmen için mevcut oturumları güncelle
+      await this.notifyTeacher(teacherId, sessionId, action);
+      
+      // 4. Oturumu öğretmen-öğrenci eşleşme listesine ekle
+      await this.addToTeacherStudentRegistry(teacherId, sessionId, studentId, action);
+      
+      // 5. MCP servisini güncelle
+      try {
+        await this.mcpService.updateVideoSessionData(sessionId, {
+          teacherId,
+          studentId, 
+          status: 'WAITING',
+          isActive: true,
+          updatedAt: new Date().toISOString()
+        });
+      } catch (error) {
+        this.logger.warn(`Failed to update MCP for session ${sessionId}: ${error.message}`);
+      }
+      
+      return {
+        success: true,
+        message: `Student session registered for teacher ${teacherId}`,
+        sessionId,
+        status: 'ACTIVE'
+      };
+    } catch (error) {
+      this.logger.error(`Error registering student session: ${error.message}`);
+      throw new HttpException(
+        `Failed to register student session: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+  
+  // Öğretmen-Öğrenci oturum eşleştirmelerini kaydetmek için
+  private async addToTeacherStudentRegistry(
+    teacherId: string, 
+    sessionId: string, 
+    studentId: string, 
+    action: string
+  ): Promise<void> {
+    try {
+      // MCP servisini kullanarak oturum bilgisini al
+      const sessionInfo = await this.mcpService.getVideoSessionInfo(sessionId);
+      
+      if (!sessionInfo) {
+        this.logger.warn(`Session ${sessionId} not found, cannot add to registry`);
+        return;
+      }
+      
+      // Öğretmen-Öğrenci kayıtlarını saklamak için basit bir CRUD işlemi yap
+      // Bu örnek için direkt MCP'yi kullanıyoruz, normalde ayrı bir veritabanı tablosu kullanılabilir
+      await this.mcpService.updateVideoSessionData(sessionId, {
+        teacherId,
+        studentId,
+        lastAction: action,
+        updatedAt: new Date().toISOString(),
+        status: 'WAITING', // Öğretmen henüz katılmadı
+      });
+      
+      this.logger.log(`Added session ${sessionId} to teacher-student registry for teacher ${teacherId}`);
+    } catch (error) {
+      this.logger.error(`Error adding to teacher-student registry: ${error.message}`);
+      // Hatayı yukarıya fırlatma, işlem devam etsin
+    }
+  }
+  
+  // Öğretmen için bekleyen oturumları getir
+  async getTeacherPendingSessions(teacherId: string): Promise<any[]> {
+    this.logger.log(`Getting pending sessions for teacher: ${teacherId}`);
+    
+    try {
+      // 1. Önce mevcut video-sessions kontrolcüsünün metodunu kullan
+      try {
+        // VideoSessionsController'ın mantığını burada kullan
+        const activeRooms = await this.listActiveRooms();
+        this.logger.log(`Found ${activeRooms.length} active rooms in LiveKit Cloud`);
+        
+        // Her bir odayı kontrol et ve öğretmenin odalarını belirle
+        const teacherRooms = activeRooms.filter(room => {
+          // Oda adı formatı: room_{teacherId}_{studentId}_{timestamp} veya sadece MongoID
+          const roomMetadata = room.metadata ? JSON.parse(room.metadata) : {};
+          return room.name.includes(teacherId) || roomMetadata.teacherId === teacherId;
+        });
+        
+        this.logger.log(`Found ${teacherRooms.length} rooms for teacher ${teacherId}`);
+        
+        // Aktif oturumları VideoSession formatına dönüştür
+        const pendingSessions = teacherRooms.map(room => {
+          const roomMetadata = room.metadata ? JSON.parse(room.metadata) : {};
+          return {
+            _id: room.name,
+            teacherId: teacherId,
+            studentId: roomMetadata.studentId || 'unknown',
+            roomName: room.name,
+            status: 'WAITING',
+            startTime: new Date(room.creationTime * 1000).toISOString(),
+            endTime: '',
+            isActive: true,
+            createdAt: new Date(room.creationTime * 1000).toISOString(),
+            updatedAt: new Date().toISOString(),
+            studentName: roomMetadata.studentName || 'Anonim Öğrenci',
+            teacherName: roomMetadata.teacherName || 'Öğretmen'
+          };
+        });
+        
+        if (pendingSessions.length > 0) {
+          this.logger.log(`Returning ${pendingSessions.length} LiveKit active sessions for teacher ${teacherId}`);
+          return pendingSessions;
+        }
+      } catch (liveKitError) {
+        this.logger.warn(`Error getting LiveKit sessions: ${liveKitError.message}, falling back to MCP`);
+      }
+      
+      // 2. LiveKit'ten oturum bulunamazsa, MCP'den deneyelim
+      // Tüm aktif oturumları al
+      const allSessions = await this.mcpService.getAllVideoSessions();
+      
+      if (!allSessions || !Array.isArray(allSessions)) {
+        this.logger.warn(`No sessions found or invalid response from MCP for teacher ${teacherId}`);
+        return [];
+      }
+      
+      // Sadece bu öğretmene ait ve bekleyen (WAITING) oturumları filtrele
+      const teacherSessions = allSessions.filter(session => {
+        // TeacherId kontrol et ve aktif/bekleyen durumda olduğundan emin ol
+        return (
+          session.teacherId === teacherId && 
+          session.status === 'WAITING' &&
+          session.isActive === true
+        );
+      });
+      
+      this.logger.log(`Found ${teacherSessions.length} pending sessions in MCP for teacher ${teacherId}`);
+      
+      // Oturum detaylarını zenginleştir - öğrenci bilgisi ekle
+      const enrichedSessions = await Promise.all(
+        teacherSessions.map(async (session) => {
+          try {
+            // Öğrenci bilgisini getir (eğer varsa)
+            const studentInfo = await this.mcpService.getUserInfo(session.studentId);
+            
+            return {
+              ...session,
+              studentName: studentInfo?.username || studentInfo?.email || 'Anonim Öğrenci',
+              lastUpdated: session.updatedAt || new Date().toISOString()
+            };
+          } catch (error) {
+            this.logger.warn(`Error enriching session ${session._id}: ${error.message}`);
+            return session;
+          }
+        })
+      );
+      
+      return enrichedSessions;
+    } catch (error) {
+      this.logger.error(`Error getting teacher pending sessions: ${error.message}`);
+      return [];
+    }
+  }
+  
+  // Oturumun aktif olduğundan emin ol
+  async ensureSessionIsActive(sessionId: string): Promise<void> {
+    try {
+      // Oturumu kontrol et
+      const sessionInfo = await this.mcpService.getVideoSessionInfo(sessionId);
+      
+      // Oturum aktif değilse aktifleştir
+      if (sessionInfo && sessionInfo.status !== 'ACTIVE') {
+        this.logger.log(`Updating session ${sessionId} status from ${sessionInfo.status} to ACTIVE`);
+        await this.mcpService.updateVideoSessionStatus(sessionId, 'ACTIVE');
+        this.logger.log(`Session ${sessionId} status updated to ACTIVE`);
+      } else if (!sessionInfo) {
+        this.logger.warn(`Session ${sessionId} not found, creating a new session record`);
+        // MCP servisine yeni oturum kaydı ekle
+        await this.mcpService.createVideoSession({
+          _id: sessionId,
+          id: sessionId,
+          status: 'ACTIVE',
+          timestamp: new Date().toISOString()
+        });
+      }
+    } catch (error) {
+      this.logger.error(`Error ensuring session is active: ${error.message}`);
+      // Bu bir destekleyici metod olduğu için hatayı yutuyoruz, ana operasyonu etkilememeli
+    }
+  }
+  
+  // Debug için MCP servisine erişim sağlar
+  public getMcpService(): McpService {
+    return this.mcpService;
   }
 }

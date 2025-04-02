@@ -212,7 +212,7 @@ const PendingVideoSessions: React.FC = () => {
                 variant="contained" 
                 color="primary"
                 startIcon={<VideoCallIcon />}
-                onClick={() => handleJoinSession(session._id)}
+                onClick={() => handleJoinSession(session._id || session.id || '')}
                 fullWidth
               >
                 Konferansa Katıl
