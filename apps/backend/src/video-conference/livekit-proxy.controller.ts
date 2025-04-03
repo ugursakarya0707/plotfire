@@ -1,10 +1,10 @@
-import { Controller, Get, Post, Put, Body, Param, HttpException, HttpStatus, Logger } from '@nestjs/common';
+import { Controller, Get, Post, Put, Body, Param, HttpException, HttpStatus, Logger, Query, Logger as NestLogger } from '@nestjs/common';
 import { LiveKitProxyService } from './livekit-proxy.service';
 
 // Orijinal controller (eski istekler için çalışmaya devam ediyor)
 @Controller('video-conference/livekit')
 export class LiveKitController {
-  private readonly logger = new Logger(LiveKitController.name);
+  private readonly logger: NestLogger = new NestLogger(LiveKitController.name);
   
   constructor(private readonly livekitProxyService: LiveKitProxyService) {}
 
@@ -140,82 +140,27 @@ export class LiveKitController {
 // Yeni controller (frontend'in yeni istekleri için)
 @Controller('livekit-proxy')
 export class LiveKitProxyController {
-  private readonly logger = new Logger(LiveKitProxyController.name);
+  private readonly logger: NestLogger = new NestLogger(LiveKitProxyController.name);
   
   constructor(private readonly livekitProxyService: LiveKitProxyService) {}
   
-  @Post('token')
-  async createToken(@Body() body: { roomName: string; participantName: string; isTeacher: boolean }) {
+  @Get('debug')
+  async getDebugInfo() {
     try {
-      const { roomName, participantName, isTeacher } = body;
-      this.logger.log(`[Proxy] Creating token for ${participantName} in room ${roomName}, isTeacher: ${isTeacher}`);
-      const token = await this.livekitProxyService.createToken(roomName, participantName, isTeacher);
-      return { token };
+      const activeRooms = await this.livekitProxyService.getActiveRooms();
+      return { activeRooms };
     } catch (error) {
-      this.logger.error(`Error creating token: ${error.message}`);
+      this.logger.error(`Error getting debug info: ${error.message}`);
       throw new HttpException(
-        `Failed to create token: ${error.message}`,
+        `Failed to get debug info: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }
   }
   
-  @Post('register-student-session')
-  async registerStudentSession(@Body() payload: any) {
+  @Get('teacher-sessions/:teacherId')
+  async getTeacherPendingSessions(@Param('teacherId') teacherId: string) {
     try {
-      this.logger.log(`[Proxy] Registering student session: ${JSON.stringify(payload)}`);
-      
-      const { sessionId, teacherId, studentId, action } = payload;
-      
-      if (!sessionId || !teacherId || !studentId) {
-        throw new HttpException(
-          'Missing required fields (sessionId, teacherId, studentId)',
-          HttpStatus.BAD_REQUEST
-        );
-      }
-      
-      // Öğrenci oturumunu kaydet
-      await this.livekitProxyService.registerStudentSession(sessionId, teacherId, studentId, action);
-      
-      // Sistemdeki kayıtlı oturumları güncelle (hem MCP hem de LiveKit)
-      try {
-        // Oturum bilgisini get
-        const sessionInfo = await this.livekitProxyService.getMcpService().getVideoSessionInfo(sessionId);
-        
-        // LiveKit odasını oluştur veya güncelle
-        if (sessionInfo && sessionInfo.roomName) {
-          await this.livekitProxyService.createRoomIfNotExists(sessionInfo.roomName, {
-            teacherId,
-            studentId,
-            sessionId,
-            action: action || 'session_created'
-          });
-        }
-      } catch (updateError) {
-        this.logger.warn(`Error updating LiveKit room: ${updateError.message}`);
-      }
-      
-      return {
-        success: true,
-        message: `Student session registered for teacher ${teacherId}`,
-        sessionId,
-        status: 'ACTIVE'
-      };
-    } catch (error) {
-      this.logger.error(`Error registering student session: ${error.message}`);
-      throw new HttpException(
-        `Failed to register student session: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
-    }
-  }
-  
-  @Get('teacher-sessions/:teacherId') 
-  async getTeacherSessions(@Param('teacherId') teacherId: string) {
-    try {
-      this.logger.log(`[Proxy] Getting sessions for teacher: ${teacherId}`);
-      
-      // Öğretmen için kayıtlı oturumları getir
       const sessions = await this.livekitProxyService.getTeacherPendingSessions(teacherId);
       return { sessions };
     } catch (error) {
@@ -226,25 +171,69 @@ export class LiveKitProxyController {
       );
     }
   }
-
-  @Get('debug-all-sessions')
-  async debugAllSessions() {
+  
+  @Post('register-student-session')
+  async registerStudentSession(@Body() body: { sessionId: string; teacherId: string; studentId: string; action?: string }) {
     try {
-      this.logger.log('[DEBUG] Fetching all sessions data for debugging');
+      const { sessionId, teacherId, studentId, action } = body;
+      const result = await this.livekitProxyService.registerStudentSession(sessionId, teacherId, studentId, action || 'join');
+      return result;
+    } catch (error) {
+      this.logger.error(`Error registering student session: ${error.message}`);
+      throw new HttpException(
+        `Failed to register student session: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+  
+  @Post('token')
+  async createTokenPost(@Body() body: { roomName: string; participantName: string; isTeacher: boolean }) {
+    try {
+      const { roomName, participantName, isTeacher } = body;
+      this.logger.log(`Creating token for ${participantName} in room ${roomName}, isTeacher: ${isTeacher}`);
       
-      // MCP servisinden doğrudan tüm oturum verilerini getir
-      const allSessions = await this.livekitProxyService.getMcpService().getAllVideoSessions();
+      const token = await this.livekitProxyService.createToken(roomName, participantName, isTeacher);
       
-      // Detaylı bilgi ekle
       return { 
-        count: allSessions.length,
-        sessions: allSessions,
-        info: 'Bu endpoint sadece debug amaçlıdır'
+        success: true,
+        token, 
+        roomName,
+        userName: participantName,
+        role: isTeacher ? 'teacher' : 'student'
       };
     } catch (error) {
-      this.logger.error(`[DEBUG] Error getting all sessions: ${error.message}`);
+      this.logger.error(`Error creating token: ${error.message}`);
       throw new HttpException(
-        `Debug error: ${error.message}`,
+        `Failed to create token: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+  
+  @Get('token')
+  async getToken(
+    @Query('room') roomName: string,
+    @Query('username') username: string,
+    @Query('isTeacher') isTeacher: string
+  ) {
+    try {
+      const isTeacherBool = isTeacher === 'true';
+      this.logger.log(`Creating token for ${username} in room ${roomName}, isTeacher: ${isTeacherBool}`);
+      
+      const token = await this.livekitProxyService.createToken(roomName, username, isTeacherBool);
+      
+      return { 
+        success: true,
+        token, 
+        roomName,
+        userName: username,
+        role: isTeacherBool ? 'teacher' : 'student'
+      };
+    } catch (error) {
+      this.logger.error(`Error creating token: ${error.message}`);
+      throw new HttpException(
+        `Failed to create token: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR
       );
     }

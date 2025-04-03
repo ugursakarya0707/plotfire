@@ -96,69 +96,18 @@ export class VideoSessionsController {
   }
   
   @Get('teacher/:teacherId/pending')
-  async getPendingSessionsForTeacher(@Param('teacherId') teacherId: string) {
+  async getPendingSessionsForTeacher(@Param('teacherId') teacherId: string, @Query('force') force?: string) {
     try {
       this.logger.log(`Getting pending sessions for teacher ${teacherId}`);
       
-      // LiveKit Cloud'daki mevcut oturumları al
-      const activeRooms = await this.livekitProxyService.listActiveRooms();
-      this.logger.log(`Found ${activeRooms.length} active rooms in LiveKit Cloud`);
+      // Sadece gerçek öğrenci isteklerini al
+      const studentInitiatedSessions = await this.livekitProxyService.getStudentInitiatedSessions(teacherId);
+      this.logger.log(`Found ${studentInitiatedSessions.length} student-initiated sessions for teacher ${teacherId}`);
       
-      // Her bir odayı kontrol et ve öğretmenin odalarını belirle
-      const teacherRooms = activeRooms.filter(room => {
-        // Oda adı formatı: room_{teacherId}_{studentId}_{timestamp} veya sadece MongoID
-        const roomMetadata = room.metadata ? JSON.parse(room.metadata) : {};
-        return room.name.includes(teacherId) || roomMetadata.teacherId === teacherId;
-      });
-      
-      this.logger.log(`Found ${teacherRooms.length} rooms for teacher ${teacherId}`);
-      
-      // Aktif oturumları VideoSession formatına dönüştür
-      const pendingSessions = teacherRooms.map(room => {
-        const roomMetadata = room.metadata ? JSON.parse(room.metadata) : {};
-        return {
-          _id: room.name,
-          teacherId: teacherId,
-          studentId: roomMetadata.studentId || 'unknown',
-          roomName: room.name,
-          status: 'WAITING',
-          startTime: new Date(room.creationTime * 1000).toISOString(),
-          endTime: '',
-          isActive: true,
-          createdAt: new Date(room.creationTime * 1000).toISOString(),
-          updatedAt: new Date().toISOString(),
-          studentName: roomMetadata.studentName || 'Öğrenci',
-          teacherName: roomMetadata.teacherName || 'Öğretmen'
-        };
-      });
-      
-      // Eğer LiveKit'ten oturum bulunamazsa, test için bir tane ekle
-      if (pendingSessions.length === 0) {
-        this.logger.log('No active sessions found in LiveKit, adding a simulated one for testing');
-        pendingSessions.push({
-          _id: `67eb2557733a430d6f9e9e4b`,
-          teacherId: teacherId,
-          studentId: '33b2c7b2-cc69-4ffc-b36d-0c8a42df1e41',
-          roomName: `room_${teacherId}_33b2c7b2-cc69-4ffc-b36d-0c8a42df1e41_${Date.now()}`,
-          status: 'WAITING',
-          startTime: new Date().toISOString(),
-          endTime: '',
-          isActive: true,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          studentName: 'Öğrenci (Test)',
-          teacherName: 'Öğretmen (Test)'
-        });
-      }
-      
-      this.logger.log(`Returning ${pendingSessions.length} pending sessions for teacher ${teacherId}`);
-      return pendingSessions;
+      return studentInitiatedSessions;
     } catch (error) {
-      this.logger.error(`Error getting pending sessions for teacher: ${error.message}`, error.stack);
-      throw new HttpException(
-        `Failed to get pending sessions for teacher: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      this.logger.error(`Error getting pending sessions for teacher ${teacherId}: ${error.message}`);
+      throw new HttpException('Failed to get pending sessions', HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
   

@@ -249,14 +249,12 @@ const TeacherDetailPage: React.FC = () => {
     fetchTeacherDetails();
   }, [teacherId, user]);
   
-  // Öğretmen için bekleyen video konferans isteklerini kontrol et
+  // Öğretmen için bekleyen video konferans isteklerini kontrol et - Polling mekanizması kaldırıldı
   useEffect(() => {
-    let isSubscribed = true; // Component unmount edildiğinde state güncellemeyi önler
-    let pollingInterval: NodeJS.Timeout;
-
+    if (!user || !teacher) return;
+    
+    // Sadece sayfa yüklendiğinde bir kez kontrol et
     const checkPendingVideoSessions = async () => {
-      if (!user || !teacher || !isSubscribed) return;
-      
       try {
         // Öğretmen ID'sini doğru şekilde belirle
         const teacherId = teacher.id || teacher._id || teacher.teacherId;
@@ -268,63 +266,32 @@ const TeacherDetailPage: React.FC = () => {
         
         console.log(`TeacherDetailPage: Checking pending sessions for teacher ID: ${teacherId}`);
         
-        let allSessions: VideoSession[] = [];
-        
-        // İki farklı API endpoint'inden oturum bilgilerini al
+        // Sadece gerçek öğrenci isteklerini getir - Doğrudan API'den al
         try {
-          // 1. Normal video oturumları
-          const sessions = await checkPendingSessionsForTeacher(teacherId);
-          console.log(`TeacherDetailPage: Received ${sessions.length} pending sessions from checkPendingSessionsForTeacher:`, sessions);
-          allSessions = [...allSessions, ...sessions];
+          // Önbelleği önlemek için timestamp ekle
+          const timestamp = new Date().getTime();
+          const response = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?t=${timestamp}`);
           
-          // 2. LiveKit Proxy API'sinden doğrudan
-          try {
-            const directResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending`);
-            if (directResponse.ok) {
-              const directSessions = await directResponse.json();
-              console.log(`TeacherDetailPage: Received ${directSessions.length} pending sessions from direct API call:`, directSessions);
-              
-              // İki array'i birleştirirken tekrarlanan oturumları filtrele
-              directSessions.forEach((session: VideoSession) => {
-                if (!allSessions.some(s => (s._id || s.id) === (session._id || session.id))) {
-                  allSessions.push(session);
-                }
-              });
-            }
-          } catch (directApiError) {
-            console.warn('TeacherDetailPage: Error getting sessions from direct API:', directApiError);
-          }
-          
-          // Hiç oturum bulunamazsa, API cache olmayan doğrudan bir sorgu yap
-          if (allSessions.length === 0) {
-            try {
-              const forceResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?force=true&t=${Date.now()}`);
-              if (forceResponse.ok) {
-                const forceSessions = await forceResponse.json();
-                console.log(`TeacherDetailPage: Received ${forceSessions.length} pending sessions from force refresh:`, forceSessions);
-                allSessions = [...allSessions, ...forceSessions];
-              }
-            } catch (forceError) {
-              console.warn('TeacherDetailPage: Error getting sessions from force refresh:', forceError);
-            }
-          }
-          
-          if (!isSubscribed) return; // Component unmount edildiyse state'i güncelleme
-          
-          console.log(`TeacherDetailPage: Final total pending sessions: ${allSessions.length}`);
-          
-          // Bekleyen oturumları state'e kaydet
-          setPendingVideoSessions(allSessions);
-          
-          // Bekleyen oturumlar varsa ve önceki state'te yoktuysa bildirim göster
-          if (allSessions.length > 0) {
-            // Yeni gelen oturumların sayısını belirle
-            const previousSessionIds = pendingVideoSessions.map(s => (s._id || s.id));
-            const newSessions = allSessions.filter(s => !previousSessionIds.includes(s._id || s.id));
+          if (response.ok) {
+            const sessions = await response.json();
+            console.log(`TeacherDetailPage: Received ${sessions.length} pending sessions:`, sessions);
             
-            if (newSessions.length > 0) {
-              // Yeni oturumlar varsa bildirim göster
-              setSnackbarMessage(`${newSessions.length} adet yeni video konferans isteği var! Lütfen kontrol ediniz.`);
+            // Gerçek öğrenci isteklerini filtrele
+            const realStudentSessions = sessions.filter((session: VideoSession) => 
+              session && 
+              session.studentId && 
+              session.status === 'WAITING' && 
+              session.isActive === true
+            );
+            
+            console.log(`TeacherDetailPage: Filtered to ${realStudentSessions.length} real student sessions`);
+            
+            // Bekleyen oturumları state'e kaydet
+            setPendingVideoSessions(realStudentSessions);
+            
+            // Bekleyen oturumlar varsa bildirim göster
+            if (realStudentSessions.length > 0) {
+              setSnackbarMessage(`${realStudentSessions.length} adet video konferans isteği var! Lütfen kontrol ediniz.`);
               setSnackbarSeverity('warning');
               setSnackbarOpen(true);
               
@@ -336,28 +303,21 @@ const TeacherDetailPage: React.FC = () => {
                 console.warn('Error playing notification sound:', soundError);
               }
             }
+          } else {
+            console.error(`TeacherDetailPage: Error fetching pending sessions: ${response.status}`);
           }
         } catch (error: any) {
           console.error(`TeacherDetailPage: Error checking pending sessions:`, error);
         }
-        
       } catch (error) {
         console.error('Error checking pending video sessions:', error);
       }
     };
     
-    // İlk çağrı - sayfa yüklendiğinde
+    // Sayfa yüklendiğinde bir kez kontrol et
     checkPendingVideoSessions();
     
-    // Polling interval - her 2 saniyede bir kontrol et (daha hızlı yaptık)
-    pollingInterval = setInterval(checkPendingVideoSessions, 2000);
-    
-    // Cleanup function
-    return () => {
-      isSubscribed = false;
-      clearInterval(pollingInterval);
-    };
-  }, [teacher, user, pendingVideoSessions]);
+  }, [teacher, user]);
   
   useEffect(() => {
     if (!teacher) return;

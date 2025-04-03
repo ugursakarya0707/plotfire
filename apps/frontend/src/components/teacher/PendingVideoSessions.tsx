@@ -4,12 +4,6 @@ import {
   Box,
   Typography,
   Paper,
-  List,
-  ListItem,
-  ListItemText,
-  ListItemAvatar,
-  Avatar,
-  Button,
   Divider,
   CircularProgress,
   Alert,
@@ -18,6 +12,8 @@ import {
   Card,
   CardContent,
   CardActions,
+  Avatar,
+  Button,
 } from '@mui/material';
 import {
   Videocam as VideocamIcon,
@@ -26,13 +22,8 @@ import {
   VideoCall as VideoCallIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../../contexts/AuthContext';
-import { VideoSession, checkPendingSessionsForTeacher } from '../../services/videoConferenceService';
-
-// Basitleştirilmiş öğrenci bilgisi
-interface StudentInfo {
-  id: string;
-  name?: string;
-}
+import { VideoSession } from '../../services/videoConferenceService';
+import { VIDEO_CONFERENCE_API_URL } from '../../config';
 
 const PendingVideoSessions: React.FC = () => {
   const navigate = useNavigate();
@@ -40,7 +31,6 @@ const PendingVideoSessions: React.FC = () => {
   const [pendingSessions, setPendingSessions] = useState<VideoSession[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<any>(null);
-  const [studentInfoMap, setStudentInfoMap] = useState<Record<string, StudentInfo>>({});
 
   useEffect(() => {
     const fetchPendingSessions = async () => {
@@ -49,56 +39,41 @@ const PendingVideoSessions: React.FC = () => {
       try {
         setLoading(true);
         
-        // Öğretmen ID'lerini kontrol et
-        const teacherIds: string[] = [];
+        // Öğretmen ID'yi belirle
+        const teacherId = user.id || user._id || user.teacherId;
         
-        // Mevcut ID'leri ekle
-        if (user.id) teacherIds.push(user.id);
-        if (user._id) teacherIds.push(user._id);
-        if (user.teacherId) teacherIds.push(user.teacherId);
-        
-        console.log('Checking pending sessions with teacher IDs:', teacherIds);
-        
-        if (teacherIds.length === 0) {
+        if (!teacherId) {
           console.error('Öğretmen ID bulunamadı:', user);
           setError('Öğretmen kimliği bulunamadı');
           setLoading(false);
           return;
         }
         
-        // Her bir ID için bekleyen oturumları kontrol et
-        let allSessions: VideoSession[] = [];
+        console.log(`PendingVideoSessions: Fetching pending sessions for teacher ID: ${teacherId}`);
         
-        for (const id of teacherIds) {
-          console.log(`Dashboard: Checking pending sessions for teacher ID: ${id}`);
-          try {
-            const sessions = await checkPendingSessionsForTeacher(id);
-            console.log(`Dashboard: Received ${sessions.length} pending sessions for ID ${id}:`, sessions);
-            allSessions = [...allSessions, ...sessions];
-          } catch (error: any) {
-            console.error(`Dashboard: Error checking pending sessions for ID ${id}:`, error);
-          }
+        // Doğrudan API'den gerçek bekleyen oturumları al
+        // Önbelleği önlemek için timestamp ekle
+        const timestamp = new Date().getTime();
+        const response = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?t=${timestamp}`);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
         }
         
-        // Tekrarlanan oturumları filtrele
-        const uniqueSessions = allSessions.filter((session, index, self) => 
-          index === self.findIndex(s => s._id === session._id)
+        const sessions = await response.json();
+        console.log(`PendingVideoSessions: Received ${sessions.length} pending sessions:`, sessions);
+        
+        // Gerçek öğrenci isteklerini filtrele
+        const realStudentSessions = sessions.filter((session: VideoSession) => 
+          session && 
+          session.studentId && 
+          session.status === 'WAITING' && 
+          session.isActive === true
         );
         
-        console.log(`Dashboard: Total unique pending sessions: ${uniqueSessions.length}`);
-        setPendingSessions(uniqueSessions);
+        console.log(`PendingVideoSessions: Filtered to ${realStudentSessions.length} real student sessions`);
         
-        // Basit bir öğrenci bilgi haritası oluştur
-        // Not: Gerçek uygulamada burada öğrenci bilgilerini API'den çekebilirsiniz
-        const studentMap: Record<string, StudentInfo> = {};
-        uniqueSessions.forEach(session => {
-          studentMap[session.studentId] = {
-            id: session.studentId,
-            name: `Öğrenci ${session.studentId.substring(0, 5)}...` // Basitleştirilmiş isim
-          };
-        });
-        setStudentInfoMap(studentMap);
-        
+        setPendingSessions(realStudentSessions);
         setError(null);
       } catch (err: any) {
         console.error('Error fetching pending sessions:', err);
@@ -110,10 +85,7 @@ const PendingVideoSessions: React.FC = () => {
 
     fetchPendingSessions();
     
-    // Her 10 saniyede bir yenile
-    const interval = setInterval(fetchPendingSessions, 10000);
-    
-    return () => clearInterval(interval);
+    // Polling mekanizması kaldırıldı - sadece sayfa yüklendiğinde bir kez kontrol ediliyor
   }, [user]);
 
   const handleJoinSession = (sessionId: string) => {
@@ -174,7 +146,7 @@ const PendingVideoSessions: React.FC = () => {
       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
         {pendingSessions.map((session) => (
           <Card 
-            key={session._id} 
+            key={session._id || session.id} 
             sx={{ 
               backgroundColor: 'rgba(255, 255, 255, 0.7)',
               transition: 'transform 0.2s',
@@ -192,30 +164,32 @@ const PendingVideoSessions: React.FC = () => {
                       <PersonIcon />
                     </Avatar>
                     <Typography variant="body1">
-                      <strong>Öğrenci ID:</strong> {session.studentId}
+                      <strong>Öğrenci:</strong> {session.studentName || `Öğrenci ${session.studentId?.substring(0, 5) || ''}...`}
                     </Typography>
                   </Box>
                   <Typography variant="body2" color="text.secondary">
                     <strong>Oluşturulma:</strong> {new Date(session.createdAt).toLocaleString()}
                   </Typography>
                   <Chip 
-                    label="Bekliyor" 
-                    color="warning" 
-                    size="small" 
-                    sx={{ mt: 1 }} 
+                    icon={<VideocamIcon />} 
+                    label={`Durum: ${session.status}`} 
+                    color="primary" 
+                    variant="outlined" 
+                    size="small"
+                    sx={{ mt: 1 }}
                   />
                 </Box>
               </Box>
             </CardContent>
             <CardActions>
-              <Button 
-                variant="contained" 
+              <Button
+                variant="contained"
                 color="primary"
                 startIcon={<VideoCallIcon />}
                 onClick={() => handleJoinSession(session._id || session.id || '')}
                 fullWidth
               >
-                Konferansa Katıl
+                Görüşmeye Katıl
               </Button>
             </CardActions>
           </Card>

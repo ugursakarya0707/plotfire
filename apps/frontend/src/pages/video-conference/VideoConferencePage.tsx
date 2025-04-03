@@ -239,7 +239,7 @@ const VideoConferencePage: React.FC = () => {
         clearInterval(intervalId);
       }
     };
-  }, [sessionId, user, endCall, remoteVideoRef, token]);
+  }, [sessionId, user, endCall, remoteVideoRef, token, participants]);
 
   // Kamera durumunu değiştir
   const toggleCamera = async () => {
@@ -248,7 +248,7 @@ const VideoConferencePage: React.FC = () => {
       
       if (sessionId) {
         // LiveKit servisi üzerinden kamera durumunu değiştir
-        await toggleCameraService(sessionId, !cameraEnabled);
+        await toggleCameraService(!cameraEnabled);
         console.log(`Camera ${!cameraEnabled ? 'enabled' : 'disabled'}`);
         
         // Yerel video akışını güncelle
@@ -273,7 +273,7 @@ const VideoConferencePage: React.FC = () => {
       
       if (sessionId) {
         // LiveKit servisi üzerinden mikrofon durumunu değiştir
-        await toggleMicrophoneService(sessionId, !micEnabled);
+        await toggleMicrophoneService(!micEnabled);
         console.log(`Microphone ${!micEnabled ? 'enabled' : 'disabled'}`);
         
         // Yerel ses akışını güncelle

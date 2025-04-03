@@ -373,6 +373,38 @@ export class McpService {
   }
 
   /**
+   * Öğretmen için bekleyen video konferans oturumlarını getirir
+   * Sadece öğrenciler tarafından başlatılan gerçek oturumları döndürür
+   * @param teacherId Öğretmen ID'si
+   */
+  async getTeacherPendingSessions(teacherId: string): Promise<any[]> {
+    try {
+      this.logger.log(`Getting pending sessions for teacher ${teacherId} from MCP`);
+      
+      // MCP veritabanından öğretmenin bekleyen oturumlarını al
+      const response = await lastValueFrom(this.httpService.get(
+        `${this.mcpApiUrl}/video-sessions/teacher/${teacherId}/pending`,
+        {
+          headers: {
+            'x-api-key': this.apiKey,
+          },
+        },
+      ));
+      
+      if (response.data && Array.isArray(response.data)) {
+        this.logger.log(`Found ${response.data.length} pending sessions for teacher ${teacherId}`);
+        return response.data;
+      }
+      
+      return [];
+    } catch (error) {
+      this.logger.error(`Error getting pending sessions for teacher: ${error.message}`);
+      // Hata durumunda boş dizi döndür
+      return [];
+    }
+  }
+
+  /**
    * Kullanıcı bilgisini getirir
    */
   async getUserInfo(userId: string): Promise<any> {

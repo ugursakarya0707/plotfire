@@ -581,6 +581,46 @@ export class LiveKitProxyService {
     }
   }
   
+  /**
+   * Aktif odaları ve katılımcılarını listeler
+   */
+  async getActiveRooms(): Promise<any[]> {
+    try {
+      this.logger.log('Listing active LiveKit rooms');
+      const rooms = await this.roomService.listRooms();
+      
+      // Odaları ve katılımcı bilgilerini dön
+      const activeRooms = await Promise.all(rooms.map(async (room) => {
+        let participants = [];
+        
+        try {
+          // Odadaki katılımcıları al
+          const roomParticipants = await this.roomService.listParticipants(room.name);
+          participants = roomParticipants.map(p => ({
+            id: p.identity,
+            name: p.name || p.identity,
+            isActive: true
+          }));
+        } catch (error) {
+          this.logger.warn(`Error listing participants for room ${room.name}: ${error.message}`);
+        }
+        
+        return {
+          roomName: room.name,
+          numParticipants: room.numParticipants,
+          creationTime: room.creationTime,
+          metadata: room.metadata,
+          participants
+        };
+      }));
+      
+      return activeRooms;
+    } catch (error) {
+      this.logger.error(`Error listing active rooms: ${error.message}`, error.stack);
+      return [];
+    }
+  }
+  
   // Öğretmene bildirim gönderme metodu - LiveKit Controller tarafından çağrılır
   async notifyTeacher(teacherId: string, sessionId: string, action: string = 'student_joined'): Promise<any> {
     this.logger.log(`Notifying teacher ${teacherId} about session ${sessionId} with action ${action}`);
@@ -709,7 +749,10 @@ export class LiveKitProxyService {
       }
       
       // Öğretmen-Öğrenci kayıtlarını saklamak için basit bir CRUD işlemi yap
-      // Bu örnek için direkt MCP'yi kullanıyoruz, normalde ayrı bir veritabanı tablosu kullanılabilir
+      // Bu örnekte, sadece gerçek öğrenci isteklerini döndüreceğiz
+      // Simüle edilmiş veya test oturumları oluşturmuyoruz
+      
+      // MCP servisindeki oturum bilgisini güncelle
       await this.mcpService.updateVideoSessionData(sessionId, {
         teacherId,
         studentId,
@@ -815,6 +858,121 @@ export class LiveKitProxyService {
       return enrichedSessions;
     } catch (error) {
       this.logger.error(`Error getting teacher pending sessions: ${error.message}`);
+      return [];
+    }
+  }
+  
+  /**
+   * Sadece öğrenciler tarafından başlatılan gerçek video konferans isteklerini getirir
+   * @param teacherId Öğretmen ID'si
+   */
+  async getStudentInitiatedSessions(teacherId: string): Promise<any[]> {
+    try {
+      this.logger.log(`Getting student-initiated sessions for teacher ${teacherId}`);
+      
+      // Birden fazla kaynaktan öğrenci tarafından başlatılan oturumları al
+      let allSessions: any[] = [];
+      
+      // 1. MCP servisinden öğretmenin bekleyen oturumlarını al
+      try {
+        const mcpSessions = await this.mcpService.getTeacherPendingSessions(teacherId);
+        if (mcpSessions && Array.isArray(mcpSessions) && mcpSessions.length > 0) {
+          this.logger.log(`Found ${mcpSessions.length} real student-initiated sessions from MCP for teacher ${teacherId}`);
+          allSessions = [...allSessions, ...mcpSessions];
+        }
+      } catch (mcpError) {
+        this.logger.warn(`Could not get sessions from MCP: ${mcpError.message}`);
+      }
+      
+      // 2. LiveKit Cloud'dan kayıtlı öğrenci oturumlarını al
+      try {
+        const studentSessions = await this.getRegisteredStudentSessions(teacherId);
+        if (studentSessions && studentSessions.length > 0) {
+          this.logger.log(`Found ${studentSessions.length} registered student sessions from LiveKit for teacher ${teacherId}`);
+          
+          // MCP'den gelen oturumlarla birleştir, ancak duplikasyonları önle
+          const existingSessionIds = new Set(allSessions.map(session => session._id || session.id));
+          const newSessions = studentSessions.filter(session => 
+            !existingSessionIds.has(session._id) && !existingSessionIds.has(session.id)
+          );
+          
+          if (newSessions.length > 0) {
+            this.logger.log(`Adding ${newSessions.length} unique LiveKit sessions to results`);
+            allSessions = [...allSessions, ...newSessions];
+          }
+        }
+      } catch (lkError) {
+        this.logger.warn(`Error getting LiveKit sessions: ${lkError.message}`);
+      }
+      
+      // 3. Oturum durumlarını kontrol et ve sadece aktif/bekleyen oturumları döndür
+      const validSessions = allSessions.filter(session => {
+        // Null/undefined kontrolü
+        if (!session) return false;
+        
+        // Durum kontrolü - sadece WAITING veya ACTIVE durumundaki oturumları al
+        const status = (session.status || '').toLowerCase();
+        const isValidStatus = status === 'waiting' || status === 'active';
+        
+        // Aktiflik kontrolü
+        const isActive = session.isActive === true;
+        
+        return isValidStatus && isActive;
+      });
+      
+      this.logger.log(`Returning ${validSessions.length} valid student-initiated sessions for teacher ${teacherId}`);
+      return validSessions;
+    } catch (error) {
+      this.logger.error(`Error getting student-initiated sessions: ${error.message}`);
+      return [];
+    }
+  }
+  
+  /**
+   * Kayıtlı öğrenci oturumlarını getirir
+   * @param teacherId Öğretmen ID'si
+   */
+  private async getRegisteredStudentSessions(teacherId: string): Promise<any[]> {
+    try {
+      // LiveKit Cloud'daki mevcut oturumları al
+      const activeRooms = await this.listActiveRooms();
+      
+      // Sadece öğrenci tarafından başlatılan ve öğretmene ait oturumları filtrele
+      const studentInitiatedRooms = activeRooms.filter(room => {
+        try {
+          if (!room.metadata) return false;
+          
+          const metadata = JSON.parse(room.metadata);
+          
+          // Sadece öğrenci tarafından başlatılan ve bu öğretmene ait oturumları al
+          return metadata.teacherId === teacherId && 
+                 metadata.studentId && 
+                 metadata.action === 'session_created';
+        } catch (e) {
+          return false;
+        }
+      });
+      
+      // Oturumları VideoSession formatına dönüştür
+      return studentInitiatedRooms.map(room => {
+        const metadata = JSON.parse(room.metadata || '{}');
+        return {
+          _id: metadata.sessionId || room.name,
+          id: metadata.sessionId || room.name,
+          teacherId: metadata.teacherId,
+          studentId: metadata.studentId || 'unknown',
+          studentName: metadata.studentName || 'Öğrenci',
+          roomName: room.name,
+          status: 'WAITING',
+          startTime: new Date(room.creationTime * 1000).toISOString(),
+          endTime: '',
+          isActive: true,
+          createdAt: new Date(room.creationTime * 1000).toISOString(),
+          updatedAt: new Date().toISOString()
+        };
+      });
+    } catch (error) {
+      this.logger.error(`Error getting registered student sessions: ${error.message}`);
       return [];
     }
   }
