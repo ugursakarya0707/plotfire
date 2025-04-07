@@ -15,6 +15,40 @@ export const createVideoSession = async (teacherId: string, studentId: string): 
       studentName = user.username || user.email || 'Anonim Öğrenci';
     }
     
+    console.log(`Student name: ${studentName}`);
+    
+    // Öğretmen ID'sini normalize et - MongoDB ObjectID veya UUID olabilir
+    // Eğer teacherId kısa bir string ise (örn. "teacher123"), gerçek bir ID ile değiştir
+    // Bu, test amaçlı kullanılan ID'lerin gerçek ID'lerle değiştirilmesini sağlar
+    if (teacherId && (teacherId.length < 10 || teacherId === 'teacher123')) {
+      console.warn(`Converting test teacher ID "${teacherId}" to actual teacher ID from URL or localStorage`);
+      
+      // URL'den öğretmen ID'sini almayı dene
+      const urlParams = new URLSearchParams(window.location.search);
+      const urlTeacherId = urlParams.get('teacherId');
+      
+      if (urlTeacherId && urlTeacherId.length > 10) {
+        teacherId = urlTeacherId;
+        console.log(`Using teacher ID from URL: ${teacherId}`);
+      } else {
+        // Eğer URL'de yoksa, localStorage'dan almayı dene (öğretmen profil sayfasından)
+        const teacherData = localStorage.getItem('currentTeacher');
+        if (teacherData) {
+          try {
+            const teacher = JSON.parse(teacherData);
+            if (teacher && (teacher.id || teacher._id)) {
+              teacherId = teacher.id || teacher._id;
+              console.log(`Using teacher ID from localStorage: ${teacherId}`);
+            }
+          } catch (e) {
+            console.error('Error parsing teacher data from localStorage:', e);
+          }
+        }
+      }
+    }
+    
+    console.log(`Final teacher ID for video session: ${teacherId}`);
+    
     const response = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions`, {
       method: 'POST',
       headers: {
@@ -44,9 +78,11 @@ export const createVideoSession = async (teacherId: string, studentId: string): 
       
       // Birden fazla bildirim yöntemi dene - daha güvenilir olması için
       let notificationSuccess = false;
+      let notificationErrors = [];
       
       // 1. Önce register endpoint'ini dene (daha güvenilir)
       try {
+        console.log(`Attempting to register student session via ${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`);
         const registerResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`, {
           method: 'POST',
           headers: {
@@ -61,30 +97,49 @@ export const createVideoSession = async (teacherId: string, studentId: string): 
           }),
         });
         
+        const registerData = await registerResponse.json();
+        console.log('Register student session response:', registerData);
+        
         if (registerResponse.ok) {
           console.log('Successfully registered new session with teacher via register endpoint');
           notificationSuccess = true;
         } else {
-          console.warn(`Register endpoint failed with status: ${registerResponse.status}`);
+          const errorMsg = `Register endpoint failed with status: ${registerResponse.status}, response: ${JSON.stringify(registerData)}`;
+          console.warn(errorMsg);
+          notificationErrors.push(errorMsg);
         }
       } catch (registerError) {
-        console.warn('Register endpoint error:', registerError);
+        const errorMsg = `Register endpoint error: ${registerError instanceof Error ? registerError.message : String(registerError)}`;
+        console.warn(errorMsg);
+        notificationErrors.push(errorMsg);
       }
       
       // 2. Eğer register başarısız olduysa, notify-teacher endpoint'ini dene
       if (!notificationSuccess) {
         try {
-          await notifyTeacherAboutSession(teacherId, sessionId, 'session_created');
-          console.log('Successfully notified teacher via notify-teacher endpoint');
-          notificationSuccess = true;
+          console.log(`Attempting to notify teacher via notifyTeacherAboutSession function`);
+          const notifyResult = await notifyTeacherAboutSession(teacherId, sessionId, 'session_created');
+          console.log('Notify teacher result:', notifyResult);
+          
+          if (notifyResult && notifyResult.success) {
+            console.log('Successfully notified teacher via notify-teacher endpoint');
+            notificationSuccess = true;
+          } else {
+            const errorMsg = `Notify teacher endpoint returned unsuccessful result: ${JSON.stringify(notifyResult)}`;
+            console.warn(errorMsg);
+            notificationErrors.push(errorMsg);
+          }
         } catch (notifyError) {
-          console.warn('Notify teacher endpoint error:', notifyError);
+          const errorMsg = `Notify teacher endpoint error: ${notifyError instanceof Error ? notifyError.message : String(notifyError)}`;
+          console.warn(errorMsg);
+          notificationErrors.push(errorMsg);
         }
       }
       
       // 3. Son çare olarak doğrudan video-sessions/teacher/:id/pending endpoint'ini çağır
       if (!notificationSuccess) {
         try {
+          console.log(`Attempting to force refresh teacher pending sessions via ${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?force=true`);
           // Öğretmenin bekleyen oturumlarını yenilemesini zorla
           const forceRefreshResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?force=true`, {
             method: 'GET',
@@ -93,22 +148,35 @@ export const createVideoSession = async (teacherId: string, studentId: string): 
             },
           });
           
+          const forceRefreshData = await forceRefreshResponse.json();
+          console.log('Force refresh response:', forceRefreshData);
+          
           if (forceRefreshResponse.ok) {
             console.log('Successfully forced refresh of teacher pending sessions');
             notificationSuccess = true;
+          } else {
+            const errorMsg = `Force refresh failed with status: ${forceRefreshResponse.status}, response: ${JSON.stringify(forceRefreshData)}`;
+            console.warn(errorMsg);
+            notificationErrors.push(errorMsg);
           }
         } catch (refreshError) {
-          console.warn('Force refresh error:', refreshError);
+          const errorMsg = `Force refresh error: ${refreshError instanceof Error ? refreshError.message : String(refreshError)}`;
+          console.warn(errorMsg);
+          notificationErrors.push(errorMsg);
         }
       }
       
-      if (notificationSuccess) {
-        console.log(`Teacher ${teacherId} successfully notified about new session ${sessionId}`);
-      } else {
-        console.warn('All notification methods failed, teacher may not see this session immediately');
+      // 4. Eğer tüm bildirim yöntemleri başarısız olduysa, uyarı göster ama devam et
+      if (!notificationSuccess) {
+        console.error(`ALL NOTIFICATION METHODS FAILED for teacher ${teacherId}, session ${sessionId}`);
+        console.error('Notification errors:', notificationErrors);
+        
+        // Kritik bir hata olarak gösterme, ama logla
+        console.warn('Continuing despite notification failures - teacher may not see the pending session');
       }
-    } catch (notifyError) {
-      console.warn('Could not notify teacher, but continuing with session creation:', notifyError);
+    } catch (notificationError) {
+      console.error('Error during teacher notification process:', notificationError);
+      // Bildirim hatası olsa bile devam et
     }
     
     return data;
@@ -592,7 +660,7 @@ export const joinVideoSessionAsStudent = async (
               body: JSON.stringify({
                 sessionId: sessionId,
                 teacherId: teacherId,
-                studentId: currentSession.studentId || 'unknown',
+                studentId: localStorage.getItem('userId') || 'unknown', // Gerçek öğrenci ID'sini kullan
                 studentName: studentName,
                 action: 'student_joined'
               }),
@@ -663,72 +731,297 @@ export const joinVideoSessionAsStudent = async (
 };
 
 // Öğretmene bildirim gönder
-export const notifyTeacherAboutSession = async (teacherId: string, sessionId: string, action: string = 'student_joined'): Promise<void> => {
-  try {
-    console.log(`Notifying teacher ${teacherId} about session ${sessionId}, action: ${action}`);
-    
-    // UUID formatını kontrol et - MongoDB ObjectID için uyumluluk kontrolü ekle
-    if (!teacherId) {
-      console.error('Teacher ID is missing, cannot notify teacher');
-      return;
-    }
-    
-    // Bildirim stratejileri - sırayla dene
-    const endpoints = [
-      // 1. Ana bildirim yöntemi
-      {
-        url: `${VIDEO_CONFERENCE_API_URL}/video-sessions/notify-teacher`,
-        method: 'POST',
-        body: { teacherId, sessionId, action }
-      },
-      // 2. Alternatif: LiveKit proxy register endpoint
-      {
-        url: `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`,
-        method: 'POST',
-        body: { teacherId, sessionId, studentId: 'auto', action }
-      },
-      // 3. Son çare: video-conference modülü
-      {
-        url: `${VIDEO_CONFERENCE_API_URL}/video-conference/livekit/notify-teacher`,
-        method: 'POST',
-        body: { teacherId, sessionId, action }
-      }
-    ];
-    
-    let success = false;
-    
-    // Her endpoint'i sırayla dene
-    for (const endpoint of endpoints) {
-      try {
-        console.log(`Trying notification endpoint: ${endpoint.url}`);
-        const response = await fetch(endpoint.url, {
-          method: endpoint.method,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(endpoint.body),
-        });
-        
-        if (response.ok) {
-          console.log(`Teacher notification successful via ${endpoint.url}`);
-          success = true;
-          break;
-        } else {
-          const errorText = await response.text();
-          console.warn(`Notification failed for ${endpoint.url}: ${response.status} - ${errorText}`);
-        }
-      } catch (error) {
-        console.warn(`Error with endpoint ${endpoint.url}:`, error);
-      }
-    }
-    
-    if (!success) {
-      console.warn('All notification methods failed, but continuing. Teacher may not see this session in their dashboard.');
-    }
-  } catch (error: any) {
-    console.error('Error in notification process:', error);
-    // Kritik değil - devam et
+export const notifyTeacherAboutSession = async (teacherId: string, sessionId: string, action: string = 'student_joined'): Promise<any> => {
+  console.log(`Attempting to notify teacher ${teacherId} about session ${sessionId} with action ${action}`);
+  
+  // Öğretmen ID'sinin geçerli olduğundan emin ol
+  if (!teacherId || teacherId === 'undefined' || teacherId === 'null') {
+    console.error('Invalid teacher ID for notification:', teacherId);
+    throw new Error('Invalid teacher ID for notification');
   }
+  
+  // Öğretmen ID'sini normalize et - MongoDB ObjectID veya UUID olabilir
+  // Eğer teacherId kısa bir string ise (örn. "teacher123"), gerçek bir ID ile değiştir
+  if (teacherId && (teacherId.length < 10 || teacherId === 'teacher123')) {
+    console.warn(`Converting test teacher ID "${teacherId}" to actual teacher ID from URL or localStorage`);
+    
+    // URL'den öğretmen ID'sini almayı dene
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlTeacherId = urlParams.get('teacherId');
+    
+    if (urlTeacherId && urlTeacherId.length > 10) {
+      teacherId = urlTeacherId;
+      console.log(`Using teacher ID from URL: ${teacherId}`);
+    } else {
+      // Eğer URL'de yoksa, localStorage'dan almayı dene (öğretmen profil sayfasından)
+      const teacherData = localStorage.getItem('currentTeacher');
+      if (teacherData) {
+        try {
+          const teacher = JSON.parse(teacherData);
+          if (teacher && (teacher.id || teacher._id)) {
+            teacherId = teacher.id || teacher._id;
+            console.log(`Using teacher ID from localStorage: ${teacherId}`);
+          }
+        } catch (e) {
+          console.error('Error parsing teacher data from localStorage:', e);
+        }
+      } else {
+        // Son çare: Mevcut kullanıcı öğretmen ise, onun ID'sini kullan
+        const userData = localStorage.getItem('user');
+        if (userData) {
+          try {
+            const user = JSON.parse(userData);
+            if (user && user.userType === 'teacher' && (user.id || user._id)) {
+              teacherId = user.id || user._id;
+              console.log(`Using current user (teacher) ID: ${teacherId}`);
+            }
+          } catch (e) {
+            console.error('Error parsing user data from localStorage:', e);
+          }
+        }
+      }
+    }
+  }
+  
+  console.log(`Final teacher ID for notification: ${teacherId}`);
+  
+  // Birden fazla endpoint deneyerek bildirim göndermeyi dene
+  const endpoints = [
+    // 1. Birincil endpoint - doğrudan livekit-proxy controller üzerinden (en güvenilir)
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/notify-teacher`,
+      method: 'POST',
+      body: { teacherId, sessionId, action }
+    },
+    // 2. İkincil endpoint - video-sessions controller üzerinden (test edildi ve çalışıyor)
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/video-sessions/notify-teacher`,
+      method: 'POST',
+      body: { teacherId, sessionId, action }
+    },
+    // 3. Öğrenci oturumunu kaydet (öğretmen bildirimini de içerir)
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/register-student-session`,
+      method: 'POST',
+      body: { 
+        sessionId, 
+        teacherId, 
+        studentId: localStorage.getItem('userId') || 'unknown', // Gerçek öğrenci ID'sini kullan
+        action 
+      }
+    },
+    // 4. Doğrudan öğretmen bekleyen oturumlarını güncelle
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/mcp/teachers/${teacherId}/pending-sessions`,
+      method: 'PUT',
+      body: { 
+        pendingSessions: [{
+          _id: sessionId,
+          id: sessionId,
+          teacherId,
+          status: 'WAITING',
+          timestamp: new Date().toISOString(),
+          action,
+          isActive: true,
+          studentId: localStorage.getItem('userId') || 'unknown' // Gerçek öğrenci ID'sini kullan
+        }]
+      }
+    },
+    // 5. Öğretmenin bekleyen oturumlarını zorla yenile
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/mcp/teachers/${teacherId}/refresh-pending-sessions`,
+      method: 'POST',
+      body: { teacherId }
+    },
+    // 6. LiveKit doğrudan erişim - öğretmen için oturum kaydı
+    {
+      url: `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/room/${sessionId}/metadata`,
+      method: 'PUT',
+      body: { 
+        metadata: {
+          teacherId,
+          sessionId,
+          action,
+          timestamp: new Date().toISOString(),
+          isActive: true,
+          studentId: localStorage.getItem('userId') || 'unknown' // Gerçek öğrenci ID'sini kullan
+        }
+      }
+    }
+  ];
+  
+  let lastError: Error | null = null;
+  let notificationSuccess = false;
+  let successfulEndpoint = '';
+  
+  // Tüm endpointleri sırayla dene
+  for (const endpoint of endpoints) {
+    try {
+      console.log(`Trying to notify teacher via endpoint: ${endpoint.url}`);
+      
+      const response = await fetch(endpoint.url, {
+        method: endpoint.method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getAuthHeader() as Record<string, string>),
+        },
+        body: JSON.stringify(endpoint.body),
+      });
+      
+      if (response.ok) {
+        console.log(`Successfully notified teacher ${teacherId} via ${endpoint.url}`);
+        notificationSuccess = true;
+        successfulEndpoint = endpoint.url;
+        
+        // Yanıtı JSON olarak parse etmeyi dene
+        try {
+          const responseData = await response.json();
+          console.log('Notification response data:', responseData);
+          
+          // Yanıtta verified alanı varsa ve false ise, doğrulama başarısız olmuş demektir
+          if (responseData && responseData.verified === false) {
+            console.warn('Server reported notification was not verified, will try next method');
+            notificationSuccess = false;
+          }
+        } catch (parseError) {
+          console.warn('Could not parse notification response:', parseError);
+        }
+        
+        if (notificationSuccess) {
+          break;
+        }
+      } else {
+        const errorText = await response.text();
+        console.warn(`Failed to notify teacher via ${endpoint.url}, status: ${response.status}, error: ${errorText}`);
+      }
+    } catch (error) {
+      console.warn(`Error notifying teacher via ${endpoint.url}:`, error);
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  
+  // Tüm bildirim yöntemleri başarısız olduysa, son çare olarak manuel oturum oluştur
+  if (!notificationSuccess) {
+    try {
+      console.log('All notification methods failed, attempting to manually create a session');
+      
+      // Öğretmen için manuel oturum oluştur
+      const manualSessionResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/manual-create`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getAuthHeader() as Record<string, string>),
+        },
+        body: JSON.stringify({
+          teacherId,
+          sessionId,
+          action,
+          status: 'WAITING',
+          isActive: true
+        }),
+      });
+      
+      if (manualSessionResponse.ok) {
+        console.log('Successfully created manual session for teacher');
+        notificationSuccess = true;
+        successfulEndpoint = 'manual-create';
+      } else {
+        const errorText = await manualSessionResponse.text();
+        console.warn(`Manual session creation failed, status: ${manualSessionResponse.status}, error: ${errorText}`);
+      }
+    } catch (manualError) {
+      console.warn('Manual session creation error:', manualError);
+      lastError = manualError instanceof Error ? manualError : new Error(String(manualError));
+    }
+  }
+  
+  // Oturum durumunu her durumda güncelle (bildirim başarısız olsa bile)
+  try {
+    console.log(`Updating session ${sessionId} status to ACTIVE`);
+    
+    const updateResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/status`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(getAuthHeader() as Record<string, string>),
+      },
+      body: JSON.stringify({ status: 'ACTIVE' }),
+    });
+    
+    if (updateResponse.ok) {
+      console.log('Session status updated to ACTIVE successfully');
+    } else {
+      const errorText = await updateResponse.text();
+      console.warn(`Failed to update session status, status: ${updateResponse.status}, error: ${errorText}`);
+    }
+  } catch (updateError) {
+    console.warn('Error updating session status:', updateError);
+  }
+  
+  // Bildirim başarılı olup olmadığını doğrula
+  let verificationSuccess = false;
+  
+  if (notificationSuccess) {
+    try {
+      console.log(`Verifying teacher ${teacherId} notification was successful`);
+      
+      // Öğretmenin bekleyen oturumlarını kontrol et
+      const verificationResponse = await fetch(`${VIDEO_CONFERENCE_API_URL}/video-sessions/teacher/${teacherId}/pending?force=true`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(getAuthHeader() as Record<string, string>),
+        }
+      });
+      
+      if (verificationResponse.ok) {
+        const pendingSessions = await verificationResponse.json();
+        
+        if (pendingSessions && Array.isArray(pendingSessions)) {
+          const sessionExists = pendingSessions.some(session => 
+            (session._id === sessionId || session.id === sessionId) && 
+            ((session.status || '').toUpperCase() === 'WAITING' || (session.status || '').toUpperCase() === 'ACTIVE')
+          );
+          
+          if (sessionExists) {
+            console.log(`Verification successful: Session ${sessionId} found in teacher ${teacherId}'s pending sessions`);
+            verificationSuccess = true;
+          } else {
+            console.warn(`Verification failed: Session ${sessionId} not found in teacher ${teacherId}'s pending sessions`);
+          }
+        } else {
+          console.warn(`Verification failed: Could not retrieve teacher ${teacherId}'s pending sessions`);
+        }
+      } else {
+        console.warn(`Verification failed: Could not get pending sessions, status: ${verificationResponse.status}`);
+      }
+    } catch (verificationError) {
+      console.warn(`Error during verification: ${verificationError}`);
+    }
+  }
+  
+  // Bildirim başarısız olduysa ve doğrulama da başarısız olduysa hata fırlat
+  if (!notificationSuccess || !verificationSuccess) {
+    console.error(`Notification ${notificationSuccess ? 'succeeded' : 'failed'} but verification ${verificationSuccess ? 'succeeded' : 'failed'} for teacher ${teacherId}, session ${sessionId}`);
+    
+    // Bildirim başarılı ama doğrulama başarısız olduysa, bildirim başarısız olarak kabul et
+    if (notificationSuccess && !verificationSuccess) {
+      console.warn(`Notification appeared successful via ${successfulEndpoint} but verification failed, treating as failure`);
+      notificationSuccess = false;
+    }
+    
+    if (!notificationSuccess) {
+      throw new Error(`Failed to notify teacher: ${lastError?.message || 'Unknown error'}`);
+    }
+  }
+  
+  return {
+    success: true,
+    verified: verificationSuccess,
+    method: successfulEndpoint,
+    message: `Teacher ${teacherId} notified about session ${sessionId}`,
+    timestamp: new Date().toISOString()
+  };
 };
 
 // Aktif oturum detaylarını al

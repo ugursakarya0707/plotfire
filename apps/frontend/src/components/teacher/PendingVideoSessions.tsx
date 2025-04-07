@@ -85,7 +85,15 @@ const PendingVideoSessions: React.FC = () => {
 
     fetchPendingSessions();
     
-    // Polling mekanizması kaldırıldı - sadece sayfa yüklendiğinde bir kez kontrol ediliyor
+    // Polling mekanizması - her 5 saniyede bir bekleyen oturumları kontrol et
+    const pollingInterval = setInterval(() => {
+      fetchPendingSessions();
+    }, 5000); // 5 saniye aralıkla kontrol et
+    
+    // Component unmount olduğunda interval'i temizle
+    return () => {
+      clearInterval(pollingInterval);
+    };
   }, [user]);
 
   const handleJoinSession = (sessionId: string) => {

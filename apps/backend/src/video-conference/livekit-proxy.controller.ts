@@ -238,4 +238,74 @@ export class LiveKitProxyController {
       );
     }
   }
+
+  @Post('debug')
+  async getDebugPost() {
+    return await this.getDebugInfo();
+  }
+
+  @Post('notify-teacher')
+  async notifyTeacher(@Body() body: { teacherId: string; sessionId: string; action?: string }) {
+    try {
+      const { teacherId, sessionId, action = 'student_joined' } = body;
+      this.logger.log(`Notifying teacher ${teacherId} about session ${sessionId} with action ${action}`);
+      
+      const result = await this.livekitProxyService.notifyTeacher(teacherId, sessionId, action);
+      return result;
+    } catch (error) {
+      this.logger.error(`Error notifying teacher: ${error.message}`);
+      throw new HttpException(
+        `Failed to notify teacher: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('room/:roomId/exists')
+  async checkRoomExists(@Param('roomId') roomId: string) {
+    try {
+      this.logger.log(`Checking if room ${roomId} exists`);
+      
+      const exists = await this.livekitProxyService.checkRoomExists(roomId);
+      return { exists, roomId };
+    } catch (error) {
+      this.logger.error(`Error checking room existence: ${error.message}`);
+      throw new HttpException(
+        `Failed to check room existence: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('room/:roomId/participants')
+  async getRoomParticipants(@Param('roomId') roomId: string) {
+    try {
+      this.logger.log(`Getting participants for room ${roomId}`);
+      
+      const participants = await this.livekitProxyService.getParticipants(roomId);
+      return { participants, roomId };
+    } catch (error) {
+      this.logger.error(`Error getting room participants: ${error.message}`);
+      throw new HttpException(
+        `Failed to get room participants: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
+
+  @Get('participants/:roomId')
+  async getParticipants(@Param('roomId') roomId: string) {
+    try {
+      this.logger.log(`Getting participants for room ${roomId}`);
+      
+      const participants = await this.livekitProxyService.getParticipants(roomId);
+      return { participants, roomId };
+    } catch (error) {
+      this.logger.error(`Error getting room participants: ${error.message}`);
+      throw new HttpException(
+        `Failed to get room participants: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
+    }
+  }
 }
