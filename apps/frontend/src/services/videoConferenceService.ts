@@ -431,104 +431,59 @@ export const joinVideoSessionAsTeacher = async (
     // Eğer oturum zaten aktifse, detayları getir
     if (currentSession.status === 'ACTIVE') {
       console.log('Session is already ACTIVE, getting session details directly');
-      return await getActiveSessionDetails(sessionId);
+      return await getActiveSessionDetails(sessionId, teacherName);
     }
     
     // Oda adı olarak doğrudan sessionId kullan
     const roomName = sessionId;
     console.log(`Teacher using room name: ${roomName} (direct sessionId)`);
     
-    try {
-      // Öğretmen için LiveKit token al
-      const tokenResponse = await fetch(
-        `${VIDEO_CONFERENCE_API_URL}/livekit-proxy/token`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            roomName: roomName,
-            participantName: teacherName,
-            isTeacher: true
-          }),
-        }
-      );
+    // Oturumu başlat ve token al (tek adımda)
+    const response = await fetch(
+      `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&roomName=${encodeURIComponent(roomName)}`,
+      {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Teacher join session error: Status ${response.status}, Response:`, errorText);
       
-      if (!tokenResponse.ok) {
-        const tokenErrorText = await tokenResponse.text();
-        console.error(`Teacher token error: Status ${tokenResponse.status}, Response:`, tokenErrorText);
-        throw new Error(`HTTP error! status: ${tokenResponse.status}`);
+      // Eğer oturum zaten aktifse, detayları getir
+      if (response.status === 400 && errorText.includes('already active')) {
+        console.log('Session is already active, getting details');
+        return await getActiveSessionDetails(sessionId, teacherName);
       }
       
-      const tokenData = await tokenResponse.json();
-      console.log('Teacher token obtained successfully');
-      
-      // Oturumu başlat veya güncelle
-      const response = await fetch(
-        `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&roomName=${encodeURIComponent(roomName)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Teacher join session error: Status ${response.status}, Response:`, errorText);
-        
-        // Eğer oturum zaten aktifse, sadece token ile devam et
-        if (response.status === 400 && errorText.includes('already active')) {
-          console.log('Session is already active, continuing with token only');
-          
-          const activeSession = await getActiveSessionDetails(sessionId);
-          activeSession.roomToken = tokenData.token;
-          
-          return activeSession;
-        }
-        
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('Teacher joined successfully:', data);
-      
-      // Aldığımız token'ı data nesnesine ekle
-      data.roomToken = tokenData.token;
-      
-      // Oturumu aktif olarak işaretle
-      await updateSessionStatus(sessionId, 'ACTIVE');
-      
-      return data;
-    } catch (tokenError) {
-      console.error('Token error, falling back to traditional method:', tokenError);
-      
-      // Eski yöntem - doğrudan session/start endpoint'i
-      const response = await fetch(
-        `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&studentName=Waiting&roomName=${encodeURIComponent(roomName)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`Backup teacher join error: Status ${response.status}, Response:`, errorText);
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      console.log('Teacher joined with backup method:', data);
-      
-      // Oturumu aktif olarak işaretle
-      await updateSessionStatus(sessionId, 'ACTIVE');
-      
-      return data;
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
+    
+    // Yanıtı işle
+    const sessionData = await response.json();
+    console.log('Teacher joined successfully:', sessionData);
+    
+    // Yanıttan VideoSession objesi oluştur
+    const videoSession: VideoSession = {
+      _id: sessionId,
+      id: sessionId,
+      teacherId: currentSession.teacherId,
+      studentId: currentSession.studentId,
+      studentName: currentSession.studentName,
+      roomName: roomName,
+      status: 'ACTIVE',
+      startTime: new Date().toISOString(),
+      endTime: '',
+      isActive: true,
+      roomToken: sessionData.token || sessionData.roomToken, // Backend'in döndüğü token formatına uyum sağla
+      createdAt: currentSession.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    
+    return videoSession;
   } catch (error: any) {
     console.error('Error joining video session as teacher:', error);
     throw new Error(error.message || 'Failed to join video session as teacher');
@@ -1025,7 +980,7 @@ export const notifyTeacherAboutSession = async (teacherId: string, sessionId: st
 };
 
 // Aktif oturum detaylarını al
-export const getActiveSessionDetails = async (sessionId: string): Promise<VideoSession> => {
+export const getActiveSessionDetails = async (sessionId: string, teacherName?: string): Promise<VideoSession> => {
   try {
     console.log(`Getting details for active session ${sessionId}`);
     
@@ -1041,6 +996,36 @@ export const getActiveSessionDetails = async (sessionId: string): Promise<VideoS
     
     const data = await response.json();
     console.log('Session details retrieved successfully:', data);
+    
+    // Eğer öğretmen adı verilmişse ve token yoksa, öğretmen için token oluştur
+    if (teacherName && !data.roomToken) {
+      console.log(`No token found for teacher ${teacherName}, generating one...`);
+      try {
+        // Öğretmen için token oluştur
+        const tokenResponse = await fetch(
+          `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(teacherName)}&roomName=${encodeURIComponent(sessionId)}`,
+          {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+        
+        if (tokenResponse.ok) {
+          const tokenData = await tokenResponse.json();
+          console.log('Teacher token generated successfully:', tokenData);
+          
+          // Token'ı data nesnesine ekle
+          data.roomToken = tokenData.token || tokenData.roomToken;
+        } else {
+          console.error(`Failed to generate teacher token: ${tokenResponse.status}`);
+        }
+      } catch (tokenError) {
+        console.error('Error generating teacher token:', tokenError);
+      }
+    }
+    
     return data;
   } catch (error: any) {
     console.error('Error getting session details:', error);

@@ -340,6 +340,8 @@ export class VideoSessionsController {
         true // isTeacher
       );
       
+      this.logger.log(`Generated token for teacher ${teacherName}: ${token.substring(0, 20)}...`);
+      
       // Oturumu ACTIVE durumuna güncelle
       try {
         // Burada oturum durumunu güncelleme işlemi yapılabilir
@@ -348,14 +350,21 @@ export class VideoSessionsController {
         this.logger.warn(`Failed to update session status: ${statusError.message}`);
       }
       
-      return {
+      // Oturum detaylarını getir
+      const sessionDetails = await this.getSessionById(sessionId);
+      
+      // Token'ı ekleyerek yanıt döndür
+      const response = {
+        ...sessionDetails,
+        token: token,
+        roomToken: token,
         success: true,
-        token,
-        roomToken: token, // Frontend'in beklediği format için
-        sessionId,
-        roomName: roomName || sessionId,
         message: `Teacher ${teacherName} has joined session ${sessionId}`
       };
+      
+      this.logger.log(`Teacher join response keys: ${Object.keys(response).join(', ')}`);
+      
+      return response;
     } catch (error) {
       this.logger.error(`Error starting session as teacher: ${error.message}`, error.stack);
       throw new HttpException(

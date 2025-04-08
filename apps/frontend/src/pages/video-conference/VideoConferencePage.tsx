@@ -32,6 +32,7 @@ import {
   toggleMicrophone as toggleMicrophoneService,
   initializeLiveKitSession
 } from '../../services/webrtcService';
+import { VIDEO_CONFERENCE_API_URL } from '../../config';
 
 // Video konferans sayfası
 const VideoConferencePage: React.FC = () => {
@@ -324,7 +325,38 @@ const VideoConferencePage: React.FC = () => {
             // LiveKit bağlantısını başlat
             await initializeLiveKitSession(sessionId, userName, true);
           } else {
-            throw new Error('No token received from server');
+            console.warn('No token in session response, trying to generate one directly');
+            
+            // Token yoksa, doğrudan token oluşturma endpoint'ini çağır
+            try {
+              const tokenResponse = await fetch(
+                `${VIDEO_CONFERENCE_API_URL}/video-sessions/${sessionId}/start?teacherName=${encodeURIComponent(userName)}&roomName=${encodeURIComponent(sessionId)}`,
+                {
+                  method: 'PUT',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                }
+              );
+              
+              if (tokenResponse.ok) {
+                const tokenData = await tokenResponse.json();
+                if (tokenData.token || tokenData.roomToken) {
+                  const newToken = tokenData.token || tokenData.roomToken;
+                  localStorage.setItem(`videoSession_${sessionId}_token`, newToken);
+                  setToken(newToken);
+                  setSessionActive(true);
+                  
+                  // LiveKit bağlantısını başlat
+                  await initializeLiveKitSession(sessionId, userName, true);
+                  return;
+                }
+              }
+              throw new Error('No token received from server');
+            } catch (tokenError) {
+              console.error('Error generating token directly:', tokenError);
+              throw new Error('No token received from server');
+            }
           }
         } catch (error: any) {
           console.error('Error joining as teacher:', error);
@@ -334,7 +366,7 @@ const VideoConferencePage: React.FC = () => {
             console.log('Session is already active, trying to get session details');
             
             try {
-              const activeSession = await getActiveSessionDetails(sessionId);
+              const activeSession = await getActiveSessionDetails(sessionId, userName);
               console.log('Active session details:', activeSession);
               
               if (activeSession.roomToken) {
