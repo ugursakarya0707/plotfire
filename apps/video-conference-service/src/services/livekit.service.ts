@@ -1,133 +1,165 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { RoomServiceClient, Room } from 'livekit-server-sdk';
+import { HttpService } from '@nestjs/axios';
+import { firstValueFrom } from 'rxjs';
 import { v4 as uuidv4 } from 'uuid';
-import * as jwt from 'jsonwebtoken';
+
+// Log seviyesi
+enum LogLevel {
+  DEBUG = 0,
+  INFO = 1,
+  WARN = 2,
+  ERROR = 3
+}
 
 @Injectable()
 export class LiveKitService {
-  private roomService: RoomServiceClient;
-  private apiKey: string;
-  private apiSecret: string;
-  private livekitUrl: string;
+  private livekitServiceUrl: string;
+  private logLevel: LogLevel = LogLevel.INFO; // Varsayılan log seviyesi
+  private tokenCache: Map<string, { token: string, expiry: number }> = new Map(); // Token önbelleği
 
-  constructor(private configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('LIVEKIT_API_KEY');
-    this.apiSecret = this.configService.get<string>('LIVEKIT_API_SECRET');
-    this.livekitUrl = this.configService.get<string>('LIVEKIT_URL') || 'wss://postply-s2s0711i.livekit.cloud';
+  constructor(
+    private configService: ConfigService,
+    private httpService: HttpService
+  ) {
+    // LiveKit mikroservisinin URL'si
+    this.livekitServiceUrl = this.configService.get<string>('LIVEKIT_SERVICE_URL') || 'http://localhost:3030/api/livekit';
     
-    console.log(`LiveKit service initialized with URL: ${this.livekitUrl}`);
+    // Log seviyesini ayarla
+    const configLogLevel = this.configService.get<string>('LOG_LEVEL') || 'INFO';
+    switch (configLogLevel.toUpperCase()) {
+      case 'DEBUG': this.logLevel = LogLevel.DEBUG; break;
+      case 'INFO': this.logLevel = LogLevel.INFO; break;
+      case 'WARN': this.logLevel = LogLevel.WARN; break;
+      case 'ERROR': this.logLevel = LogLevel.ERROR; break;
+    }
     
-    this.roomService = new RoomServiceClient(
-      this.livekitUrl,
-      this.apiKey,
-      this.apiSecret,
-    );
+    this.logInfo(`LiveKit service initialized with microservice URL: ${this.livekitServiceUrl}`);
+    this.logInfo(`Token cache enabled with 1-hour expiry`);
+  }
+
+  // Log yardımcı fonksiyonları
+  private logDebug(message: string): void {
+    if (this.logLevel <= LogLevel.DEBUG) {
+      console.log(`[DEBUG] [LiveKitService] ${message}`);
+    }
+  }
+
+  private logInfo(message: string): void {
+    if (this.logLevel <= LogLevel.INFO) {
+      console.log(`[INFO] [LiveKitService] ${message}`);
+    }
+  }
+
+  private logWarn(message: string): void {
+    if (this.logLevel <= LogLevel.WARN) {
+      console.warn(`[WARN] [LiveKitService] ${message}`);
+    }
+  }
+
+  private logError(message: string, error?: any): void {
+    if (this.logLevel <= LogLevel.ERROR) {
+      console.error(`[ERROR] [LiveKitService] ${message}`);
+      if (error) {
+        console.error(error);
+      }
+    }
   }
 
   /**
    * Yeni bir oda oluşturur
    */
-  async createRoom(roomName: string = null): Promise<Room> {
+  async createRoom(roomName: string = null): Promise<any> {
     // Oda adı belirtilmemişse otomatik oluştur
     if (!roomName) {
       roomName = `room_${uuidv4()}`;
     }
     
     try {
-      const room = await this.roomService.createRoom({
-        name: roomName,
-        emptyTimeout: 60 * 30, // 30 dakika
-        maxParticipants: 2, // Sadece öğretmen ve öğrenci
-      });
+      this.logDebug(`Creating room: ${roomName}`);
       
-      return room;
+      const response = await firstValueFrom(
+        this.httpService.post(`${this.livekitServiceUrl}/room`, { roomName })
+      );
+      
+      if (response.data && response.data.success) {
+        this.logInfo(`Room ${roomName} created successfully via microservice`);
+        return response.data.room;
+      } else {
+        throw new Error('Failed to create room via microservice');
+      }
     } catch (error) {
-      console.error('Error creating LiveKit room:', error);
+      this.logError('Error creating LiveKit room via microservice:', error);
       throw new Error(`Failed to create LiveKit room: ${error.message}`);
     }
   }
 
   /**
    * Öğretmen için token oluşturur
-   * Öğretmenler için tam yetkilendirme (yayın yapabilir, izleyebilir, veri paylaşabilir)
    */
-  generateTeacherToken(roomName: string, participantName: string, participantId: string): string {
-    try {
-      console.log(`Generating teacher token for room: ${roomName}, participant: ${participantName}`);
-      
-      // Öğretmen için JWT token oluştur - LiveKit Cloud formatında
-      const tokenData = {
-        video: {
-          roomCreate: true,
-          roomJoin: true,
-          roomAdmin: true,
-          room: roomName,
-          canPublish: true,
-          canSubscribe: true,
-          canPublishData: true
-        },
-        iss: this.apiKey,
-        sub: participantId,
-        name: participantName,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 saat
-        metadata: JSON.stringify({ role: 'teacher' })
-      };
-      
-      // JWT token oluştur
-      const token = jwt.sign(tokenData, this.apiSecret, { algorithm: 'HS256' });
-      console.log(`Teacher token generated successfully for ${participantName}`);
-      return token;
-    } catch (error) {
-      console.error('Error generating teacher token:', error);
-      throw new Error(`Failed to generate teacher token: ${error.message}`);
-    }
+  generateTeacherToken(roomName: string, participantName: string, participantId: string): Promise<any> {
+    return this.generateToken(roomName, participantName, participantId, true);
   }
 
   /**
    * Öğrenci için token oluşturur
-   * Öğrenciler için yetkilendirme (yayın yapabilir, izleyebilir, veri paylaşabilir)
    */
-  generateStudentToken(roomName: string, participantName: string, participantId: string): string {
-    try {
-      console.log(`Generating student token for room: ${roomName}, participant: ${participantName}`);
-      
-      // Öğrenci için JWT token oluştur - LiveKit Cloud formatında
-      const tokenData = {
-        video: {
-          roomJoin: true,
-          room: roomName,
-          canPublish: true, // Öğrencilerin de kamera ve mikrofon paylaşabilmesine izin ver
-          canSubscribe: true,
-          canPublishData: true
-        },
-        iss: this.apiKey,
-        sub: participantId,
-        name: participantName,
-        iat: Math.floor(Date.now() / 1000),
-        exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 saat
-        metadata: JSON.stringify({ role: 'student' })
-      };
-      
-      // JWT token oluştur
-      const token = jwt.sign(tokenData, this.apiSecret, { algorithm: 'HS256' });
-      console.log(`Student token generated successfully for ${participantName}`);
-      return token;
-    } catch (error) {
-      console.error('Error generating student token:', error);
-      throw new Error(`Failed to generate student token: ${error.message}`);
-    }
+  generateStudentToken(roomName: string, participantName: string, participantId: string): Promise<any> {
+    return this.generateToken(roomName, participantName, participantId, false);
   }
 
   /**
-   * Belirli bir oda için token oluşturur (eski metod - geriye uyumluluk için)
+   * Belirli bir oda için token oluşturur
    */
-  generateToken(roomName: string, participantName: string, participantId: string, isTeacher: boolean): string {
-    if (isTeacher) {
-      return this.generateTeacherToken(roomName, participantName, participantId);
-    } else {
-      return this.generateStudentToken(roomName, participantName, participantId);
+  async generateToken(roomName: string, participantName: string, participantId: string, isTeacher: boolean): Promise<any> {
+    try {
+      // Önbellekte token var mı kontrol et
+      const cacheKey = `${roomName}:${participantId}:${isTeacher ? 'teacher' : 'student'}`;
+      const cachedToken = this.tokenCache.get(cacheKey);
+      
+      // Önbellekte token varsa ve süresi dolmamışsa kullan
+      if (cachedToken && cachedToken.expiry > Date.now()) {
+        this.logDebug(`Using cached token for ${participantName} in room ${roomName} (expires in ${Math.floor((cachedToken.expiry - Date.now()) / 1000)} seconds)`);
+        return {
+          token: cachedToken.token,
+          wsUrl: this.configService.get<string>('LIVEKIT_WS_URL')
+        };
+      }
+      
+      this.logDebug(`Generating ${isTeacher ? 'teacher' : 'student'} token for room: ${roomName}, participant: ${participantName}`);
+      
+      const response = await firstValueFrom(
+        this.httpService.post(`${this.livekitServiceUrl}/token`, {
+          roomName,
+          participantName: participantName || participantId, // Eğer isim yoksa ID'yi kullan
+          isTeacher
+        })
+      );
+      
+      if (response.data && response.data.success) {
+        const token = response.data.token;
+        this.logInfo(`Token generated successfully for ${participantName}`);
+        
+        // Token'ı önbelleğe al (1 saat geçerli)
+        const expiryTime = Date.now() + (60 * 60 * 1000); // 1 saat
+        this.tokenCache.set(cacheKey, { 
+          token,
+          expiry: expiryTime
+        });
+        
+        this.logDebug(`Token cached with key ${cacheKey}, expires at ${new Date(expiryTime).toISOString()}`);
+        
+        // Token ve WebSocket URL'sini döndür
+        return {
+          token,
+          wsUrl: this.configService.get<string>('LIVEKIT_WS_URL')
+        };
+      } else {
+        throw new Error('Failed to generate token via microservice');
+      }
+    } catch (error) {
+      this.logError(`Error generating ${isTeacher ? 'teacher' : 'student'} token via microservice:`, error);
+      throw new Error(`Failed to generate token: ${error.message}`);
     }
   }
 
@@ -138,7 +170,7 @@ export class LiveKitService {
     try {
       await this.deleteRoom(roomName);
     } catch (error) {
-      console.error('Error ending LiveKit room:', error);
+      this.logError('Error ending LiveKit room:', error);
       throw new Error(`Failed to end LiveKit room: ${error.message}`);
     }
   }
@@ -148,42 +180,104 @@ export class LiveKitService {
    */
   async deleteRoom(roomName: string): Promise<void> {
     try {
-      console.log(`Deleting LiveKit room: ${roomName}`);
-      await this.roomService.deleteRoom(roomName);
-      console.log(`LiveKit room ${roomName} deleted successfully`);
+      this.logDebug(`Deleting LiveKit room: ${roomName}`);
+      
+      const response = await firstValueFrom(
+        this.httpService.delete(`${this.livekitServiceUrl}/room/${roomName}`)
+      );
+      
+      if (response.data && response.data.success) {
+        this.logInfo(`LiveKit room ${roomName} deleted successfully via microservice`);
+      } else {
+        throw new Error('Failed to delete room via microservice');
+      }
     } catch (error) {
-      console.error(`Error deleting LiveKit room: ${error.message}`);
+      this.logError(`Error deleting LiveKit room via microservice:`, error);
       throw new Error(`Failed to delete LiveKit room: ${error.message}`);
     }
   }
   
   /**
-   * Odadaki katılımcıları listeler
-   * Not: LiveKit SDK 1.2.7 sürümünde doğrudan katılımcıları listelemek için bir metot bulunmuyor.
-   * Bu nedenle şu anda boş bir dizi döndürüyoruz.
+   * Bir odadaki katılımcıları listeler
    */
-  async listParticipants(roomName: string): Promise<any[]> {
+  async getParticipants(roomName: string, refresh: boolean = false): Promise<any[]> {
     try {
-      console.log(`Listing participants for room: ${roomName}`);
-      console.log(`Note: Direct participant listing is not supported in the current LiveKit SDK version.`);
+      this.logDebug(`Fetching participants for room: ${roomName}, refresh: ${refresh}`);
       
-      // Odanın var olup olmadığını kontrol et
-      const rooms = await this.roomService.listRooms();
-      const roomExists = rooms.some(room => room.name === roomName);
+      // Katılımcı listesini LiveKit mikroservisinden al
+      const url = refresh 
+        ? `${this.livekitServiceUrl}/participants/${roomName}?refresh=true`
+        : `${this.livekitServiceUrl}/participants/${roomName}`;
       
-      if (!roomExists) {
-        console.log(`Room ${roomName} not found, returning empty array`);
+      const response = await firstValueFrom(
+        this.httpService.get(url)
+      );
+      
+      if (response.data && response.data.success) {
+        const participants = response.data.participants || [];
+        this.logInfo(`Found ${participants.length} participants in room ${roomName}`);
+        
+        // Katılımcı sayısı 0 ise ve refresh parametresi false ise, refresh ile tekrar dene
+        if (participants.length === 0 && !refresh) {
+          this.logWarn(`No participants found in room ${roomName}, retrying with refresh=true`);
+          return this.getParticipants(roomName, true);
+        }
+        
+        // Debug log
+        if (this.logLevel === LogLevel.DEBUG && participants.length > 0) {
+          participants.forEach((p, i) => {
+            this.logDebug(`Participant ${i+1}: ${p.identity}, State: ${p.state}, Metadata: ${p.metadata || 'None'}`);
+          });
+        }
+        
+        return participants;
+      } else {
+        this.logWarn(`Failed to get participants: ${response.data?.message || 'Unknown error'}`);
+        
+        // Eğer refresh parametresi false ise, refresh ile tekrar dene
+        if (!refresh) {
+          this.logInfo(`Retrying with refresh=true`);
+          return this.getParticipants(roomName, true);
+        }
+        
         return [];
       }
-      
-      // LiveKit SDK 1.2.7 sürümünde doğrudan katılımcıları listelemek için bir metot yok
-      // Bu nedenle boş bir dizi döndürüyoruz
-      console.log(`Room ${roomName} exists, but participant listing is not directly supported`);
-      return [];
     } catch (error) {
-      console.error(`Error listing participants: ${error.message}`);
-      // Hata durumunda boş dizi döndür
+      this.logError(`Error getting participants for room ${roomName}:`, error);
+      
+      // Eğer refresh parametresi false ise, refresh ile tekrar dene
+      if (!refresh) {
+        this.logInfo(`Retrying with refresh=true after error`);
+        // Kısa bir bekleme ekleyelim
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        return this.getParticipants(roomName, true);
+      }
+      
       return [];
+    }
+  }
+  
+  /**
+   * Odanın varlığını kontrol eder
+   */
+  async roomExists(roomName: string): Promise<boolean> {
+    try {
+      this.logDebug(`Checking if room exists: ${roomName}`);
+      
+      const response = await firstValueFrom(
+        this.httpService.get(`${this.livekitServiceUrl}/room/${roomName}/exists`)
+      );
+      
+      if (response.data && response.data.success) {
+        const exists = response.data.exists;
+        this.logDebug(`Room ${roomName} exists: ${exists}`);
+        return exists;
+      }
+      
+      return false;
+    } catch (error) {
+      this.logError(`Error checking room existence via microservice:`, error);
+      return false;
     }
   }
 }

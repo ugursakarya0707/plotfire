@@ -218,20 +218,17 @@ export class LiveKitProxyController {
     @Query('isTeacher') isTeacher: string
   ) {
     try {
+      if (!roomName || !username) {
+        throw new HttpException('Room name and username are required', HttpStatus.BAD_REQUEST);
+      }
+      
       const isTeacherBool = isTeacher === 'true';
-      this.logger.log(`Creating token for ${username} in room ${roomName}, isTeacher: ${isTeacherBool}`);
+      this.logger.log(`Creating token via GET for ${username} in room ${roomName}, isTeacher: ${isTeacherBool}`);
       
       const token = await this.livekitProxyService.createToken(roomName, username, isTeacherBool);
-      
-      return { 
-        success: true,
-        token, 
-        roomName,
-        userName: username,
-        role: isTeacherBool ? 'teacher' : 'student'
-      };
+      return { token };
     } catch (error) {
-      this.logger.error(`Error creating token: ${error.message}`);
+      this.logger.error(`Error creating token via GET: ${error.message}`);
       throw new HttpException(
         `Failed to create token: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR

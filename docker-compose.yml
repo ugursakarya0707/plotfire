@@ -4,7 +4,7 @@ services:
     container_name: postply-postgres
     image: postgres:14
     ports:
-      - "5432:5432"
+      - "5439:5432"
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -131,6 +131,26 @@ services:
       - "27018:27017"
     volumes:
       - video_conference_db_data:/data/db
+    restart: unless-stopped
+    networks:
+      - postply-network
+
+  # LiveKit Service
+  livekit-service:
+    container_name: livekit-service
+    build:
+      context: ./livekit-service
+    ports:
+      - "3030:3030"
+    environment:
+      - NODE_ENV=production
+      - PORT=3030
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      - LIVEKIT_WS_URL=${LIVEKIT_WS_URL}
+      - CORS_ORIGIN=http://localhost:3000
+    volumes:
+      - ./livekit-service/logs:/app/logs
     restart: unless-stopped
     networks:
       - postply-network

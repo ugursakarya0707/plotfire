@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiveKit Test Client</title>
+    <script src="https://unpkg.com/livekit-client@1.12.3/dist/livekit-client.umd.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .video-container { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 20px; }
+        video { width: 320px; height: 240px; background: #333; }
+        .controls { margin: 20px 0; }
+        button { padding: 8px 16px; margin-right: 10px; }
+        .log { margin-top: 20px; border: 1px solid #ccc; padding: 10px; height: 200px; overflow-y: auto; background: #f5f5f5; }
+        .participant { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>LiveKit Test Client</h1>
+        
+        <div>
+            <label for="role">Role:</label>
+            <select id="role">
+                <option value="teacher">Teacher</option>
+                <option value="student">Student</option>
+            </select>
+            
+            <label for="name">Name:</label>
+            <input type="text" id="name" value="teacher1" />
+            
+            <label for="room">Room:</label>
+            <input type="text" id="room" value="room_teacher1_student1_1744498225979" />
+        </div>
+        
+        <div class="controls">
+            <button id="connect">Connect</button>
+            <button id="disconnect">Disconnect</button>
+            <button id="toggleVideo">Toggle Video</button>
+            <button id="toggleAudio">Toggle Audio</button>
+            <button id="getParticipants">Get Participants</button>
+        </div>
+        
+        <div class="video-container" id="videos"></div>
+        
+        <h3>Participants:</h3>
+        <div id="participants"></div>
+        
+        <h3>Logs:</h3>
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        let room;
+        let connected = false;
+        
+        function log(message) {
+            const logElem = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.textContent = `${new Date().toLocaleTimeString()}: ${message}`;
+            logElem.appendChild(entry);
+            logElem.scrollTop = logElem.scrollHeight;
+        }
+        
+        async function getToken() {
+            const role = document.getElementById('role').value;
+            const name = document.getElementById('name').value;
+            const roomName = document.getElementById('room').value;
+            const isTeacher = role === 'teacher';
+            
+            try {
+                log(`Requesting token for ${name} in room ${roomName} as ${role}...`);
+                const response = await fetch('http://localhost:3040/api/video-sessions/livekit/token', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    mode: 'cors',
+                    body: JSON.stringify({
+                        roomName,
+                        participantName: name,
+                        isTeacher
+                    })
+                });
+                
+                const data = await response.json();
+                log(`Token response: ${JSON.stringify(data)}`);
+                if (data.success && data.token) {
+                    log(`Token received successfully`);
+                    return data.token;
+                } else {
+                    log(`Error getting token: ${JSON.stringify(data)}`);
+                    return null;
+                }
+            } catch (error) {
+                log(`Error fetching token: ${error.message}`);
+                return null;
+            }
+        }
+        
+        async function getParticipants() {
+            const roomName = document.getElementById('room').value;
+            
+            try {
+                log(`Fetching participants for room ${roomName}...`);
+                const response = await fetch(`http://localhost:3040/api/video-sessions/livekit/participants/${roomName}`, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json'
+                    },
+                    mode: 'cors'
+                });
+                
+                const data = await response.json();
+                log(`Participants response: ${JSON.stringify(data)}`);
+                
+                const participantsElem = document.getElementById('participants');
+                participantsElem.innerHTML = '';
+                
+                if (data.success && data.participants) {
+                    log(`Retrieved ${data.participants.length} participants`);
+                    
+                    data.participants.forEach(p => {
+                        const div = document.createElement('div');
+                        div.className = 'participant';
+                        div.innerHTML = `
+                            <div><strong>Name:</strong> ${p.name || p.identity}</div>
+                            <div><strong>State:</strong> ${p.state}</div>
+                            <div><strong>Metadata:</strong> ${p.metadata || 'None'}</div>
+                        `;
+                        participantsElem.appendChild(div);
+                    });
+                } else {
+                    log(`Error getting participants: ${JSON.stringify(data)}`);
+                }
+            } catch (error) {
+                log(`Error fetching participants: ${error.message}`);
+            }
+        }
+        
+        async function connect() {
+            if (connected) {
+                log('Already connected');
+                return;
+            }
+            
+            const token = await getToken();
+            if (!token) {
+                log('Failed to get token');
+                return;
+            }
+            
+            try {
+                log('Connecting to LiveKit via livekit-service...');
+                
+                // Önce oda oluştur
+                const roomName = document.getElementById('room').value;
+                log(`Creating/checking room: ${roomName}`);
+                
+                try {
+                    const roomResponse = await fetch('http://localhost:3040/api/video-sessions/livekit/room', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json'
+                        },
+                        mode: 'cors',
+                        body: JSON.stringify({
+                            roomName,
+                            metadata: JSON.stringify({
+                                sessionId: 'test-session',
+                                teacherId: 'teacher1',
+                                studentId: 'student1'
+                            })
+                        })
+                    });
+                    
+                    const roomData = await roomResponse.json();
+                    log(`Room response: ${JSON.stringify(roomData)}`);
+                } catch (roomError) {
+                    log(`Note: Room may already exist: ${roomError.message}`);
+                    // Oda zaten var olabilir, devam et
+                }
+                
+                // LiveKit Room oluştur ve bağlan
+                room = new LivekitClient.Room();
+                
+                room.on(LivekitClient.RoomEvent.ParticipantConnected, participant => {
+                    log(`Participant connected: ${participant.identity}`);
+                    getParticipants();
+                });
+                
+                room.on(LivekitClient.RoomEvent.ParticipantDisconnected, participant => {
+                    log(`Participant disconnected: ${participant.identity}`);
+                    getParticipants();
+                });
+                
+                room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    log(`Track subscribed: ${track.kind} from ${participant.identity}`);
+                    if (track.kind === 'video') {
+                        const videoElem = document.createElement('video');
+                        videoElem.id = `video-${participant.identity}`;
+                        videoElem.autoplay = true;
+                        videoElem.muted = participant.isLocal;
+                        document.getElementById('videos').appendChild(videoElem);
+                        track.attach(videoElem);
+                    }
+                });
+                
+                room.on(LivekitClient.RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+                    log(`Track unsubscribed: ${track.kind} from ${participant.identity}`);
+                    if (track.kind === 'video') {
+                        const videoElem = document.getElementById(`video-${participant.identity}`);
+                        if (videoElem) {
+                            track.detach(videoElem);
+                            videoElem.remove();
+                        }
+                    }
+                });
+                
+                // LiveKit Cloud'a bağlan
+                log('Connecting to LiveKit Cloud with token via livekit-service');
+                await room.connect('wss://postply-s2s0711i.livekit.cloud', token);
+                log(`Connected to room: ${room.name}`);
+                
+                connected = true;
+                
+                // Publish local tracks
+                log('Creating local tracks...');
+                const localTracks = await LivekitClient.createLocalTracks({
+                    audio: true,
+                    video: true
+                });
+                
+                log(`Publishing ${localTracks.length} local tracks...`);
+                // Doğru metodu kullan
+                for (const track of localTracks) {
+                    await room.localParticipant.publishTrack(track);
+                }
+                log('Published local tracks');
+                
+                // Display local video
+                const localVideo = localTracks.find(track => track.kind === 'video');
+                if (localVideo) {
+                    const videoElem = document.createElement('video');
+                    videoElem.id = 'local-video';
+                    videoElem.autoplay = true;
+                    videoElem.muted = true;
+                    document.getElementById('videos').appendChild(videoElem);
+                    localVideo.attach(videoElem);
+                }
+                
+                getParticipants();
+            } catch (error) {
+                log(`Error connecting to LiveKit: ${error.message}`);
+                console.error('Connection error:', error);
+            }
+        }
+        
+        async function disconnect() {
+            if (!connected || !room) {
+                log('Not connected');
+                return;
+            }
+            
+            try {
+                await room.disconnect();
+                log('Disconnected from room');
+                connected = false;
+                document.getElementById('videos').innerHTML = '';
+            } catch (error) {
+                log(`Error disconnecting: ${error.message}`);
+            }
+        }
+        
+        async function toggleVideo() {
+            if (!connected || !room) {
+                log('Not connected');
+                return;
+            }
+            
+            try {
+                const videoTracks = room.localParticipant.trackPublications.filter(
+                    pub => pub.track && pub.track.kind === 'video'
+                );
+                
+                for (const pub of videoTracks) {
+                    await pub.setEnabled(!pub.isEnabled);
+                }
+                
+                log(`Video ${videoTracks[0]?.isEnabled ? 'enabled' : 'disabled'}`);
+            } catch (error) {
+                log(`Error toggling video: ${error.message}`);
+            }
+        }
+        
+        async function toggleAudio() {
+            if (!connected || !room) {
+                log('Not connected');
+                return;
+            }
+            
+            try {
+                const audioTracks = room.localParticipant.trackPublications.filter(
+                    pub => pub.track && pub.track.kind === 'audio'
+                );
+                
+                for (const pub of audioTracks) {
+                    await pub.setEnabled(!pub.isEnabled);
+                }
+                
+                log(`Audio ${audioTracks[0]?.isEnabled ? 'enabled' : 'disabled'}`);
+            } catch (error) {
+                log(`Error toggling audio: ${error.message}`);
+            }
+        }
+        
+        document.getElementById('connect').addEventListener('click', connect);
+        document.getElementById('disconnect').addEventListener('click', disconnect);
+        document.getElementById('toggleVideo').addEventListener('click', toggleVideo);
+        document.getElementById('toggleAudio').addEventListener('click', toggleAudio);
+        document.getElementById('getParticipants').addEventListener('click', getParticipants);
+        
+        // Update name based on role selection
+        document.getElementById('role').addEventListener('change', function() {
+            const role = this.value;
+            document.getElementById('name').value = role === 'teacher' ? 'teacher1' : 'student1';
+        });
+    </script>
+</body>
+</html>

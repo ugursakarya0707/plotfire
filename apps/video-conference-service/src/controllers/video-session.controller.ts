@@ -181,6 +181,92 @@ export class VideoSessionController {
     }
   }
 
+  @Post('livekit/token')
+  @Public()
+  async generateLiveKitToken(
+    @Body() tokenRequest: { roomName: string; participantName: string; participantId: string; isTeacher: boolean }
+  ) {
+    try {
+      console.log('Generating LiveKit token:', tokenRequest);
+      
+      const { roomName, participantName, participantId, isTeacher } = tokenRequest;
+      
+      if (!roomName || !participantName) {
+        throw new BadRequestException('Room name and participant name are required');
+      }
+      
+      // LiveKit servisini kullanarak token oluştur
+      const tokenData = await this.videoSessionService.generateLiveKitToken(
+        roomName,
+        participantName,
+        participantId || participantName,
+        isTeacher
+      );
+      
+      return {
+        success: true,
+        token: tokenData.token,
+        wsUrl: tokenData.wsUrl
+      };
+    } catch (error) {
+      console.error('Error generating LiveKit token:', error);
+      throw new BadRequestException(`Failed to generate LiveKit token: ${error.message}`);
+    }
+  }
+  
+  @Get('livekit/participants/:roomName')
+  @Public()
+  async getLiveKitParticipants(
+    @Param('roomName') roomName: string,
+    @Query('refresh') refresh: boolean
+  ) {
+    try {
+      console.log(`Getting LiveKit participants for room: ${roomName}, refresh: ${refresh}`);
+      
+      if (!roomName) {
+        throw new BadRequestException('Room name is required');
+      }
+      
+      // LiveKit servisini kullanarak katılımcıları al
+      const participants = await this.videoSessionService.getLiveKitParticipants(roomName, refresh);
+      
+      return {
+        success: true,
+        participants
+      };
+    } catch (error) {
+      console.error('Error getting LiveKit participants:', error);
+      throw new BadRequestException(`Failed to get LiveKit participants: ${error.message}`);
+    }
+  }
+
+  @Post('livekit/room')
+  @Public()
+  async createLiveKitRoom(
+    @Body() roomRequest: { roomName: string }
+  ) {
+    try {
+      console.log('Creating LiveKit room:', roomRequest);
+      
+      const { roomName } = roomRequest;
+      
+      if (!roomName) {
+        throw new BadRequestException('Room name is required');
+      }
+      
+      // LiveKit servisini kullanarak oda oluştur
+      const roomData = await this.videoSessionService.createLiveKitRoom(roomName);
+      
+      return {
+        success: true,
+        room: roomData
+      };
+    } catch (error) {
+      console.error('Error creating LiveKit room:', error);
+      throw new BadRequestException(`Failed to create LiveKit room: ${error.message}`);
+    }
+  }
+
   @Delete(':id')
   @UseGuards(JwtAuthGuard)
   @Roles('ADMIN') 

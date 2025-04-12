@@ -188,6 +188,93 @@ export class VideoSessionService {
   }
 
   /**
+   * LiveKit token oluşturur
+   */
+  async generateLiveKitToken(
+    roomName: string, 
+    participantName: string, 
+    participantId: string, 
+    isTeacher: boolean
+  ): Promise<any> {
+    try {
+      console.log(`Generating LiveKit token for ${isTeacher ? 'teacher' : 'student'} ${participantName} in room ${roomName}`);
+      
+      // Önce odanın var olduğundan emin ol
+      const roomExists = await this.liveKitService.roomExists(roomName);
+      
+      // Oda yoksa oluştur
+      if (!roomExists) {
+        console.log(`Room ${roomName} does not exist, creating it`);
+        await this.liveKitService.createRoom(roomName);
+      }
+      
+      // Token oluştur
+      const tokenData = await this.liveKitService.generateToken(
+        roomName,
+        participantName,
+        participantId,
+        isTeacher
+      );
+      
+      return tokenData;
+    } catch (error) {
+      console.error(`Error generating LiveKit token: ${error.message}`);
+      throw new Error(`Failed to generate LiveKit token: ${error.message}`);
+    }
+  }
+  
+  /**
+   * LiveKit katılımcılarını listeler
+   */
+  async getLiveKitParticipants(roomName: string, refresh: boolean = false): Promise<any[]> {
+    try {
+      console.log(`Getting LiveKit participants for room ${roomName}, refresh: ${refresh}`);
+      
+      // Önce odanın var olduğundan emin ol
+      const roomExists = await this.liveKitService.roomExists(roomName);
+      
+      if (!roomExists) {
+        console.warn(`Room ${roomName} does not exist`);
+        return [];
+      }
+      
+      // Katılımcıları al
+      const participants = await this.liveKitService.getParticipants(roomName, refresh);
+      
+      return participants;
+    } catch (error) {
+      console.error(`Error getting LiveKit participants: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * LiveKit odası oluşturur
+   */
+  async createLiveKitRoom(roomName: string): Promise<any> {
+    try {
+      console.log(`Creating LiveKit room: ${roomName}`);
+      
+      // Önce odanın var olup olmadığını kontrol et
+      const roomExists = await this.liveKitService.roomExists(roomName);
+      
+      if (roomExists) {
+        console.log(`Room ${roomName} already exists`);
+        return { name: roomName, exists: true };
+      }
+      
+      // Oda yoksa oluştur
+      const room = await this.liveKitService.createRoom(roomName);
+      console.log(`Room ${roomName} created successfully`);
+      
+      return room;
+    } catch (error) {
+      console.error(`Error creating LiveKit room: ${error.message}`);
+      throw new Error(`Failed to create LiveKit room: ${error.message}`);
+    }
+  }
+
+  /**
    * Oturum durumunu günceller
    */
   async updateStatus(sessionId: string, status: VideoSessionStatus | string): Promise<VideoSession> {

@@ -4,6 +4,7 @@ import { HttpService } from '@nestjs/axios';
 import { McpService } from '../mcp/mcp.service';
 import * as jwt from 'jsonwebtoken';
 import { ConfigService } from '@nestjs/config';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable()
 export class LiveKitProxyService {
@@ -11,7 +12,9 @@ export class LiveKitProxyService {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly livekitHost: string;
+  private readonly livekitMicroserviceUrl: string;
   private readonly videoConferenceApiUrl: string;
+  private readonly tokenCache: Map<string, { token: string, expiry: number }> = new Map();
   
   private roomService: RoomServiceClient;
   private httpService: HttpService;
@@ -21,14 +24,16 @@ export class LiveKitProxyService {
     private readonly mcpService: McpService,
     private readonly configService: ConfigService
   ) {
-    this.apiKey = this.configService.get<string>('LIVEKIT_API_KEY', 'devkey');
-    this.apiSecret = this.configService.get<string>('LIVEKIT_API_SECRET', 'devsecret');
+    this.apiKey = this.configService.get<string>('LIVEKIT_API_KEY', 'APIP2e8PX6AbSkQ');
+    this.apiSecret = this.configService.get<string>('LIVEKIT_API_SECRET', 'B4ywBpfTlaHL4T8EW2fU1mvuDxKTIwaXoSHIYeEJpOQB');
     this.livekitHost = this.configService.get<string>('LIVEKIT_URL', 'wss://postply-s2s0711i.livekit.cloud');
+    this.livekitMicroserviceUrl = this.configService.get<string>('LIVEKIT_MICROSERVICE_URL', 'http://localhost:3030/api/livekit');
     this.videoConferenceApiUrl = this.configService.get<string>('VIDEO_CONFERENCE_API_URL', 'http://localhost:3000/api');
     
     this.roomService = new RoomServiceClient(this.livekitHost, this.apiKey, this.apiSecret);
     this.httpService = httpService;
-    this.logger.log(`LiveKit proxy service initialized with host: ${this.livekitHost}`);
+    this.logger.log(`LiveKit proxy service initialized with microservice URL: ${this.livekitMicroserviceUrl}`);
+    this.logger.log(`Token cache enabled with 1-hour expiry`);
   }
   
   /**
@@ -77,7 +82,7 @@ export class LiveKitProxyService {
       }
       
       // Token oluştur
-      const token = this.generateToken(roomName, userName, isTeacher);
+      const token = await this.generateToken(roomName, userName, isTeacher);
       
       this.logger.log(`Session initialized successfully for ${userName} in room ${roomName}`);
       
@@ -121,153 +126,116 @@ export class LiveKitProxyService {
     try {
       this.logger.log(`Creating room if not exists: ${roomName}`);
       
-      // Oda adını normalize et
-      const normalizedRoomName = roomName.trim();
-      
-      if (!normalizedRoomName) {
-        throw new Error('Room name is required');
+      if (!roomName) {
+        throw new HttpException('Room name is required', HttpStatus.BAD_REQUEST);
       }
+      
+      const normalizedRoomName = roomName.trim();
       
       // Odanın var olup olmadığını kontrol et
       let roomExists = false;
       try {
-        const rooms = await this.roomService.listRooms();
+        const rooms = await this.listActiveRooms();
         roomExists = rooms.some(room => room.name === normalizedRoomName);
         this.logger.log(`Room exists check: ${roomExists ? 'Yes' : 'No'}`);
       } catch (checkError) {
-        this.logger.warn(`Error checking if room exists: ${checkError.message}, assuming it doesn't exist`);
+        this.logger.error(`Error checking if room exists: ${checkError.message}`);
+        // Hata durumunda odayı oluşturmaya çalış
       }
       
       // Oda yoksa oluştur
       if (!roomExists) {
         this.logger.log(`Room ${normalizedRoomName} does not exist, creating...`);
         
-        const roomMetadata = metadata ? JSON.stringify(metadata) : '';
-        
         try {
-          await this.roomService.createRoom({
-            name: normalizedRoomName,
-            emptyTimeout: 60 * 60, // 1 saat
-            maxParticipants: 10,
-            metadata: roomMetadata
-          });
+          // LiveKit mikroservisini kullanarak odayı oluştur
+          const response = await firstValueFrom(
+            this.httpService.post(`${this.livekitMicroserviceUrl}/room`, {
+              roomName: normalizedRoomName,
+              metadata: metadata ? JSON.stringify(metadata) : undefined
+            })
+          );
           
-          this.logger.log(`Room ${normalizedRoomName} created successfully with metadata: ${roomMetadata}`);
-          
-          // MCP'deki oturum verisini de güncelle
-          if (metadata && metadata.sessionId) {
-            try {
-              await this.mcpService.updateVideoSessionData(metadata.sessionId, {
-                roomName: normalizedRoomName,
-                ...metadata,
-                status: 'ACTIVE',
-                isActive: true,
-                updatedAt: new Date().toISOString()
-              });
-              this.logger.log(`Updated MCP session data for ${metadata.sessionId}`);
-            } catch (mcpError) {
-              this.logger.warn(`Error updating MCP session: ${mcpError.message}, but continuing`);
-            }
-          }
-          
-          return { created: true, name: normalizedRoomName, metadata: roomMetadata };
-        } catch (createError) {
-          // Oda zaten varsa (409 hatası) veya başka bir hata varsa
-          if (createError.message && createError.message.includes('already exists')) {
-            this.logger.log(`Room ${normalizedRoomName} already exists (409 error)`);
-            roomExists = true;
+          if (response.status === 200) {
+            this.logger.log(`Room ${normalizedRoomName} created successfully via microservice`);
+            return response.data;
           } else {
-            this.logger.error(`Error creating room: ${createError.message}`);
-            throw createError;
+            throw new Error(`Failed to create room: ${response.statusText}`);
           }
+        } catch (error) {
+          this.logger.error(`Error creating room via microservice: ${error.message}`);
+          throw new HttpException(`Failed to create room: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
         }
+      } else {
+        this.logger.log(`Room ${normalizedRoomName} already exists`);
+        return { name: normalizedRoomName, exists: true };
       }
-      
-      // Oda mevcutsa, metadata'yı güncelle
-      if (roomExists && metadata) {
-        try {
-          const roomMetadata = JSON.stringify(metadata);
-          await this.roomService.updateRoomMetadata(normalizedRoomName, roomMetadata);
-          this.logger.log(`Updated metadata for existing room ${normalizedRoomName}`);
-          
-          // MCP'deki oturum verisini de güncelle
-          if (metadata.sessionId) {
-            try {
-              await this.mcpService.updateVideoSessionData(metadata.sessionId, {
-                roomName: normalizedRoomName,
-                ...metadata,
-                status: 'ACTIVE',
-                isActive: true,
-                updatedAt: new Date().toISOString()
-              });
-              this.logger.log(`Updated MCP session data for ${metadata.sessionId}`);
-            } catch (mcpError) {
-              this.logger.warn(`Error updating MCP session: ${mcpError.message}, but continuing`);
-            }
-          }
-          
-          return { created: false, name: normalizedRoomName, updated: true };
-        } catch (updateError) {
-          this.logger.warn(`Error updating room metadata: ${updateError.message}, but continuing`);
-        }
-      }
-      
-      this.logger.log(`Room ${normalizedRoomName} already exists`);
-      return { created: false, name: normalizedRoomName };
     } catch (error) {
-      this.logger.error(`Error creating/checking room: ${error.message}`, error.stack);
-      throw error;
+      this.logger.error(`Error in createRoomIfNotExists: ${error.message}`);
+      throw new HttpException(`Failed to create room: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
   
   /**
    * LiveKit token oluşturur
    */
-  private generateToken(roomName: string, userName: string, isTeacher: boolean): string {
+  private async generateToken(roomName: string, userName: string, isTeacher: boolean): Promise<string> {
     try {
       this.logger.log(`Generating token for ${userName} in room ${roomName}, isTeacher: ${isTeacher}`);
       
-      // Token için gerekli bilgileri hazırla
-      const now = Math.floor(Date.now() / 1000);
-      const exp = now + 24 * 60 * 60; // 24 saat geçerli
+      if (!roomName) {
+        throw new HttpException('Room name is required', HttpStatus.BAD_REQUEST);
+      }
       
-      // Kullanıcı kimliğini normalize et - boşluk ve özel karakterleri kaldır
-      const normalizedIdentity = userName.replace(/[^a-zA-Z0-9]/g, '_');
+      if (!userName) {
+        throw new HttpException('User name is required', HttpStatus.BAD_REQUEST);
+      }
       
-      // JWT için payload hazırla
-      const payload = {
-        iss: this.apiKey,
-        sub: normalizedIdentity,
-        exp: exp,
-        nbf: now,
-        jti: `${roomName}-${normalizedIdentity}-${now}`,
-        video: {
-          room: roomName,
-          roomJoin: true,
-          canPublish: true,
-          canSubscribe: true,
-          canPublishData: true,
-          roomAdmin: isTeacher,
-          roomCreate: isTeacher,
-        },
-        metadata: JSON.stringify({
-          name: userName,
-          role: isTeacher ? 'teacher' : 'student',
-          isTeacher: isTeacher
-        })
-      };
+      // Önce cache'de token var mı kontrol et
+      const cacheKey = `${roomName}:${userName}:${isTeacher}`;
+      const cachedToken = this.tokenCache.get(cacheKey);
+      const now = Date.now();
       
-      // JWT token oluştur
-      const token = jwt.sign(payload, this.apiSecret, { algorithm: 'HS256' });
+      if (cachedToken && cachedToken.expiry > now) {
+        this.logger.log(`Using cached token for ${userName} in room ${roomName}, expires in ${Math.round((cachedToken.expiry - now) / 1000)} seconds`);
+        return cachedToken.token;
+      }
       
-      this.logger.log(`Token generated successfully for ${userName} with identity ${normalizedIdentity}`);
-      return token;
+      // LiveKit mikroservisini kullanarak token oluştur
+      try {
+        const response = await firstValueFrom(
+          this.httpService.post(`${this.livekitMicroserviceUrl}/token`, {
+            roomName,
+            identity: userName,
+            isTeacher
+          })
+        );
+        
+        if (response.status === 200 && response.data.token) {
+          const token = response.data.token;
+          
+          // Token'ı cache'e ekle (1 saat geçerli)
+          const expiryTime = now + (60 * 60 * 1000); // 1 saat
+          this.tokenCache.set(cacheKey, { token, expiry: expiryTime });
+          
+          this.logger.log(`Token generated successfully for ${userName} in room ${roomName}`);
+          return token;
+        } else {
+          throw new Error('Invalid token response from microservice');
+        }
+      } catch (error) {
+        this.logger.error(`Error generating token via microservice: ${error.message}`);
+        throw new HttpException(
+          `LiveKit mikroservisi ile token oluşturulamadı. Lütfen LiveKit servisinin çalıştığından emin olun. Hata: ${error.message}`, 
+          HttpStatus.SERVICE_UNAVAILABLE
+        );
+      }
     } catch (error) {
-      this.logger.error(`Error generating token: ${error.message}`, error.stack);
-      throw new HttpException(
-        `Failed to generate token: ${error.message}`,
-        HttpStatus.INTERNAL_SERVER_ERROR
-      );
+      this.logger.error(`Error in generateToken: ${error.message}`);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(`Failed to generate token: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
   
@@ -276,121 +244,46 @@ export class LiveKitProxyService {
    */
   async getParticipants(roomName: string): Promise<any[]> {
     try {
-      this.logger.log(`Getting participants for room ${roomName}`);
-      
       // Oda adını normalize et
       const normalizedRoomName = roomName.trim();
+      this.logger.log(`Getting participants for room ${normalizedRoomName}`);
       
       if (!normalizedRoomName) {
-        this.logger.warn('Empty room name provided');
-        return [];
+        throw new HttpException('Room name is required', HttpStatus.BAD_REQUEST);
       }
       
-      // Tüm odaları listele ve doğru odayı bul
+      // Mikroservis üzerinden katılımcıları al
       try {
-        const rooms = await this.roomService.listRooms();
+        const response = await firstValueFrom(
+          this.httpService.get(`${this.livekitMicroserviceUrl}/participants/${normalizedRoomName}`)
+        );
         
-        if (rooms.length === 0) {
-          this.logger.warn('No active rooms found');
-          return [];
-        }
-        
-        this.logger.log(`Available rooms: ${rooms.map(r => r.name).join(', ')}`);
-        
-        // Önce doğrudan eşleşmeyi dene
-        let targetRoom = rooms.find(r => r.name === normalizedRoomName);
-        
-        // Doğrudan eşleşme yoksa, içeren odaları kontrol et
-        if (!targetRoom) {
-          // Özel formatlı oda adlarını kontrol et (room_ID_timestamp formatı)
-          const roomWithPrefix = rooms.find(r => 
-            r.name.includes(`room_`) && r.name.includes(normalizedRoomName)
-          );
+        if (response.status === 200) {
+          const participants = response.data.participants || [];
+          this.logger.log(`Retrieved ${participants.length} participants from microservice for room ${normalizedRoomName}`);
           
-          if (roomWithPrefix) {
-            targetRoom = roomWithPrefix;
-            this.logger.log(`Found room with prefix: ${targetRoom.name}`);
-          } else {
-            // Herhangi bir şekilde roomName'i içeren odaları kontrol et
-            const roomContainingId = rooms.find(r => r.name.includes(normalizedRoomName));
-            if (roomContainingId) {
-              targetRoom = roomContainingId;
-              this.logger.log(`Found room containing ID: ${targetRoom.name}`);
-            }
-          }
-        }
-        
-        if (!targetRoom) {
-          this.logger.warn(`Room ${normalizedRoomName} not found in available rooms`);
-          // Oda bulunamadığında boş dizi döndür
-          return [];
-        }
-        
-        this.logger.log(`Found matching room: ${targetRoom.name}`);
-        
-        // Bulunan odadaki katılımcıları listele
-        try {
-          const participants = await this.roomService.listParticipants(targetRoom.name);
-          
-          if (!participants || participants.length === 0) {
-            this.logger.warn(`No participants found in room ${targetRoom.name}`);
-            return [];
+          if (participants.length === 0) {
+            this.logger.warn(`No participants found in room ${normalizedRoomName}`);
           }
           
-          // Katılımcı bilgilerini dönüştür
-          const formattedParticipants = participants.map(p => {
-            const metadata = p.metadata ? JSON.parse(p.metadata) : {};
-            return {
-              identity: p.identity,
-              name: metadata.name || p.identity,
-              role: metadata.role || (metadata.isTeacher ? 'teacher' : 'student'),
-              isTeacher: metadata.isTeacher || metadata.role === 'teacher',
-              state: p.state,
-              joinedAt: p.joinedAt,
-              streamUrl: this.getStreamUrl(targetRoom.name, p)
-            };
-          });
-          
-          this.logger.log(`Found ${formattedParticipants.length} participants in room ${targetRoom.name}`);
-          return formattedParticipants;
-        } catch (participantError) {
-          this.logger.error(`Error listing participants: ${participantError.message}`);
-          return [];
+          return participants;
+        } else {
+          throw new Error(`Microservice returned status ${response.status}`);
         }
-      } catch (roomsError) {
-        this.logger.error(`Error listing rooms: ${roomsError.message}`);
-        return [];
+      } catch (microserviceError) {
+        this.logger.error(`Error getting participants from microservice: ${microserviceError.message}`);
+        throw new HttpException(
+          `LiveKit mikroservisi ile katılımcılar alınamadı. Lütfen LiveKit servisinin çalıştığından emin olun. Hata: ${microserviceError.message}`,
+          HttpStatus.SERVICE_UNAVAILABLE
+        );
       }
     } catch (error) {
-      this.logger.error(`Error getting participants: ${error.message}`, error.stack);
-      return [];
-    }
-  }
-  
-  /**
-   * Manuel olarak katılımcı listesi oluşturur
-   * Bu, LiveKit API'sinden katılımcı listesi alınamadığında kullanılır
-   */
-  private createManualParticipantsList(roomName: string): any[] {
-    this.logger.log(`Creating manual participants list for room ${roomName}`);
-    
-    // Sabit bir öğretmen ve öğrenci katılımcısı oluştur
-    return [
-      {
-        id: 'teacher123',
-        name: 'Teacher',
-        type: 'teacher',
-        status: 'active',
-        streamUrl: this.getStreamUrl(roomName, { identity: 'teacher123', name: 'Teacher' } as ParticipantInfo),
-      },
-      {
-        id: 'student456',
-        name: 'Student',
-        type: 'student',
-        status: 'active',
-        streamUrl: this.getStreamUrl(roomName, { identity: 'student456', name: 'Student' } as ParticipantInfo),
+      this.logger.error(`Error getting participants: ${error.message}`);
+      if (error instanceof HttpException) {
+        throw error;
       }
-    ];
+      throw new HttpException(`Failed to get participants: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
+    }
   }
   
   /**
@@ -409,6 +302,10 @@ export class LiveKitProxyService {
     try {
       this.logger.log(`Ending LiveKit session: ${sessionId}, reason: ${reason}`);
       
+      if (!sessionId) {
+        throw new HttpException('Session ID is required', HttpStatus.BAD_REQUEST);
+      }
+      
       // Odayı bul
       const rooms = await this.roomService.listRooms();
       const matchingRoom = rooms.find(room => room.name === sessionId);
@@ -422,26 +319,30 @@ export class LiveKitProxyService {
         // MCP servisine oturumun kapandığını bildir
         try {
           await this.mcpService.updateVideoSessionStatus(sessionId, 'COMPLETED');
-          this.logger.log(`Session ${sessionId} status updated to COMPLETED`);
-        } catch (error) {
-          this.logger.warn(`Failed to update session status: ${error.message}`);
+        } catch (mcpError) {
+          this.logger.error(`Error updating session status in MCP: ${mcpError.message}`);
+          throw new HttpException(
+            `Failed to update session status in MCP: ${mcpError.message}`,
+            HttpStatus.INTERNAL_SERVER_ERROR
+          );
         }
         
         return {
           success: true,
           message: `Session ${sessionId} ended successfully`,
-          reason
+          timestamp: new Date().toISOString()
         };
       } else {
-        this.logger.warn(`Room ${sessionId} not found, nothing to end`);
-        return {
-          success: false,
-          message: `Session ${sessionId} not found`,
-          reason
-        };
+        this.logger.warn(`Room ${sessionId} not found, might be already closed`);
+        throw new HttpException(`Room ${sessionId} not found, might be already closed`, HttpStatus.NOT_FOUND);
       }
     } catch (error) {
       this.logger.error(`Error ending session: ${error.message}`);
+      
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
       throw new HttpException(
         `Failed to end session: ${error.message}`,
         HttpStatus.INTERNAL_SERVER_ERROR
@@ -683,12 +584,33 @@ export class LiveKitProxyService {
    */
   async listActiveRooms(): Promise<Room[]> {
     try {
-      const rooms = await this.roomService.listRooms();
-      this.logger.log(`Retrieved ${rooms.length} active rooms from LiveKit Cloud`);
-      return rooms;
+      this.logger.log('Listing active LiveKit rooms via microservice');
+      
+      try {
+        const response = await firstValueFrom(
+          this.httpService.get(`${this.livekitMicroserviceUrl}/rooms`)
+        );
+        
+        if (response.status === 200) {
+          const rooms = response.data.rooms || [];
+          this.logger.log(`Retrieved ${rooms.length} active rooms from microservice`);
+          return rooms;
+        } else {
+          throw new Error(`Microservice returned status ${response.status}`);
+        }
+      } catch (microserviceError) {
+        this.logger.error(`Error listing active rooms from microservice: ${microserviceError.message}`);
+        throw new HttpException(
+          `LiveKit mikroservisi ile aktif odalar alınamadı. Lütfen LiveKit servisinin çalıştığından emin olun. Hata: ${microserviceError.message}`,
+          HttpStatus.SERVICE_UNAVAILABLE
+        );
+      }
     } catch (error) {
-      this.logger.error(`Error listing active rooms: ${error.message}`, error.stack);
-      return [];
+      this.logger.error(`Error listing active rooms: ${error.message}`);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(`Failed to list active rooms: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
   
@@ -697,38 +619,33 @@ export class LiveKitProxyService {
    */
   async getActiveRooms(): Promise<any[]> {
     try {
-      this.logger.log('Listing active LiveKit rooms');
-      const rooms = await this.roomService.listRooms();
+      this.logger.log('Getting active rooms with participants via microservice');
       
-      // Odaları ve katılımcı bilgilerini dön
-      const activeRooms = await Promise.all(rooms.map(async (room) => {
-        let participants = [];
+      try {
+        const response = await firstValueFrom(
+          this.httpService.get(`${this.livekitMicroserviceUrl}/active-rooms`)
+        );
         
-        try {
-          // Odadaki katılımcıları al
-          const roomParticipants = await this.roomService.listParticipants(room.name);
-          participants = roomParticipants.map(p => ({
-            id: p.identity,
-            name: p.name || p.identity,
-            isActive: true
-          }));
-        } catch (error) {
-          this.logger.warn(`Error listing participants for room ${room.name}: ${error.message}`);
+        if (response.status === 200) {
+          const activeRooms = response.data.rooms || [];
+          this.logger.log(`Retrieved ${activeRooms.length} active rooms with participants from microservice`);
+          return activeRooms;
+        } else {
+          throw new Error(`Microservice returned status ${response.status}`);
         }
-        
-        return {
-          roomName: room.name,
-          numParticipants: room.numParticipants,
-          creationTime: room.creationTime,
-          metadata: room.metadata,
-          participants
-        };
-      }));
-      
-      return activeRooms;
+      } catch (microserviceError) {
+        this.logger.error(`Error getting active rooms from microservice: ${microserviceError.message}`);
+        throw new HttpException(
+          `LiveKit mikroservisi ile aktif odalar ve katılımcılar alınamadı. Lütfen LiveKit servisinin çalıştığından emin olun. Hata: ${microserviceError.message}`,
+          HttpStatus.SERVICE_UNAVAILABLE
+        );
+      }
     } catch (error) {
-      this.logger.error(`Error listing active rooms: ${error.message}`, error.stack);
-      return [];
+      this.logger.error(`Error getting active rooms: ${error.message}`);
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(`Failed to get active rooms: ${error.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
   
@@ -742,10 +659,7 @@ export class LiveKitProxyService {
       
       if (!normalizedTeacherId) {
         this.logger.warn('Teacher ID is empty or undefined');
-        return {
-          success: false,
-          message: 'Teacher ID is required'
-        };
+        throw new HttpException('Teacher ID is required', HttpStatus.BAD_REQUEST);
       }
       
       // Oturum bilgilerini al
@@ -816,32 +730,21 @@ export class LiveKitProxyService {
           };
         } else {
           this.logger.warn(`Failed to notify teacher ${normalizedTeacherId}: ${JSON.stringify(result)}`);
+          throw new HttpException(
+            `Failed to notify teacher ${normalizedTeacherId}`,
+            HttpStatus.INTERNAL_SERVER_ERROR
+          );
         }
       } catch (error) {
-        this.logger.warn(`Error notifying teacher ${normalizedTeacherId}: ${error.message}`);
+        this.logger.error(`Error notifying teacher ${normalizedTeacherId}: ${error.message}`);
+        throw new HttpException(
+          `Error notifying teacher ${normalizedTeacherId}: ${error.message}`,
+          HttpStatus.INTERNAL_SERVER_ERROR
+        );
       }
-      
-      // Hata durumunda bile başarılı bir yanıt döndür
-      return {
-        success: true, // Başarılı olarak işaretle (frontend'in çalışmaya devam etmesi için)
-        verified: false, // Ancak doğrulanamadığını belirt
-        message: `Teacher ${teacherId} notification simulated due to error`,
-        action,
-        timestamp: new Date().toISOString(),
-        roomExists,
-        participants
-      };
     } catch (error) {
       this.logger.error(`Error notifying teacher: ${error.message}`);
-      
-      // Hata durumunda bile başarılı bir yanıt döndür
-      return {
-        success: true, // Başarılı olarak işaretle (frontend'in çalışmaya devam etmesi için)
-        verified: false, // Ancak doğrulanamadığını belirt
-        message: `Teacher ${teacherId} notification simulated due to error`,
-        action,
-        timestamp: new Date().toISOString()
-      };
+      throw error;
     }
   }
   
@@ -891,7 +794,11 @@ export class LiveKitProxyService {
           updatedAt: new Date().toISOString()
         });
       } catch (error) {
-        this.logger.warn(`Failed to update MCP for session ${sessionId}: ${error.message}`);
+        this.logger.error(`Failed to update MCP for session ${sessionId}: ${error.message}`);
+        throw new HttpException(
+          `Failed to update MCP for session ${sessionId}: ${error.message}`,
+          HttpStatus.INTERNAL_SERVER_ERROR
+        );
       }
       
       return {
@@ -945,6 +852,12 @@ export class LiveKitProxyService {
     this.logger.log(`Getting pending sessions for teacher: ${teacherId}`);
     
     try {
+      if (!teacherId) {
+        throw new HttpException('Teacher ID is required', HttpStatus.BAD_REQUEST);
+      }
+      
+      const normalizedTeacherId = teacherId.trim();
+      
       // 1. Önce mevcut video-sessions kontrolcüsünün metodunu kullan
       try {
         // VideoSessionsController'ın mantığını burada kullan
@@ -982,33 +895,23 @@ export class LiveKitProxyService {
           return pendingSessions;
         }
       } catch (liveKitError) {
-        this.logger.warn(`Error getting LiveKit sessions: ${liveKitError.message}, falling back to MCP`);
+        this.logger.error(`Error getting LiveKit sessions: ${liveKitError.message}`);
+        throw new HttpException(`Failed to get LiveKit sessions: ${liveKitError.message}`, HttpStatus.INTERNAL_SERVER_ERROR);
       }
       
       // 2. LiveKit'ten oturum bulunamazsa, MCP'den deneyelim
       // Tüm aktif oturumları al
-      const allSessions = await this.mcpService.getAllVideoSessions();
+      const pendingSessions = await this.mcpService.getTeacherPendingSessions(normalizedTeacherId);
       
-      if (!allSessions || !Array.isArray(allSessions)) {
-        this.logger.warn(`No sessions found or invalid response from MCP for teacher ${teacherId}`);
-        return [];
+      if (!pendingSessions || !Array.isArray(pendingSessions)) {
+        throw new HttpException(`No pending sessions found for teacher ${teacherId}`, HttpStatus.NOT_FOUND);
       }
       
-      // Sadece bu öğretmene ait ve bekleyen (WAITING) oturumları filtrele
-      const teacherSessions = allSessions.filter(session => {
-        // TeacherId kontrol et ve aktif/bekleyen durumda olduğundan emin ol
-        return (
-          session.teacherId === teacherId && 
-          session.status === 'WAITING' &&
-          session.isActive === true
-        );
-      });
-      
-      this.logger.log(`Found ${teacherSessions.length} pending sessions in MCP for teacher ${teacherId}`);
+      this.logger.log(`Found ${pendingSessions.length} pending sessions in MCP for teacher ${teacherId}`);
       
       // Oturum detaylarını zenginleştir - öğrenci bilgisi ekle
       const enrichedSessions = await Promise.all(
-        teacherSessions.map(async (session) => {
+        pendingSessions.map(async (session) => {
           try {
             // Öğrenci bilgisini getir (eğer varsa)
             const studentInfo = await this.mcpService.getUserInfo(session.studentId);
@@ -1028,7 +931,13 @@ export class LiveKitProxyService {
       return enrichedSessions;
     } catch (error) {
       this.logger.error(`Error getting teacher pending sessions: ${error.message}`);
-      return [];
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      throw new HttpException(
+        `Failed to get teacher pending sessions: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
   
@@ -1037,12 +946,11 @@ export class LiveKitProxyService {
     try {
       this.logger.log(`Getting student-initiated sessions for teacher ${teacherId}`);
       
-      // TeacherId'yi normalize et
       const normalizedTeacherId = teacherId || '';
       
       if (!normalizedTeacherId) {
         this.logger.warn('Teacher ID is empty or undefined');
-        return [];
+        throw new HttpException('Teacher ID is required', HttpStatus.BAD_REQUEST);
       }
       
       this.logger.log(`Fetching pending sessions for teacher ${normalizedTeacherId}`);
@@ -1051,8 +959,11 @@ export class LiveKitProxyService {
       const pendingSessions = await this.mcpService.getTeacherPendingSessions(normalizedTeacherId);
       
       if (!pendingSessions || !Array.isArray(pendingSessions)) {
-        this.logger.warn(`Invalid response from MCP for teacher ${normalizedTeacherId}: ${JSON.stringify(pendingSessions)}`);
-        return [];
+        this.logger.error(`Invalid response from MCP for teacher ${normalizedTeacherId}: ${JSON.stringify(pendingSessions)}`);
+        throw new HttpException(
+          `Failed to get valid sessions from MCP for teacher ${normalizedTeacherId}`,
+          HttpStatus.INTERNAL_SERVER_ERROR
+        );
       }
       
       this.logger.log(`Found ${pendingSessions.length} sessions from MCP for teacher ${normalizedTeacherId}`);
@@ -1084,13 +995,26 @@ export class LiveKitProxyService {
       return activeSessions;
     } catch (error) {
       this.logger.error(`Error getting student-initiated sessions: ${error.message}`);
-      return [];
+      
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
+      throw new HttpException(
+        `Failed to get student-initiated sessions: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
   
   // Öğretmene bildirim gönderme metodu - LiveKit Controller tarafından çağrılır
   private async getRegisteredStudentSessions(teacherId: string): Promise<any[]> {
     try {
+      if (!teacherId) {
+        this.logger.error('Teacher ID is empty or undefined');
+        throw new HttpException('Teacher ID is required', HttpStatus.BAD_REQUEST);
+      }
+      
       // LiveKit Cloud'daki mevcut oturumları al
       const activeRooms = await this.listActiveRooms();
       
@@ -1130,35 +1054,52 @@ export class LiveKitProxyService {
       });
     } catch (error) {
       this.logger.error(`Error getting registered student sessions: ${error.message}`);
-      return [];
+      
+      if (error instanceof HttpException) {
+        throw error;
+      }
+      
+      throw new HttpException(
+        `Failed to get registered student sessions: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
   
   // Öğretmene bildirim gönderme metodu - LiveKit Controller tarafından çağrılır
   async ensureSessionIsActive(sessionId: string): Promise<void> {
     try {
+      if (!sessionId) {
+        this.logger.error('Session ID is empty or undefined');
+        throw new HttpException('Session ID is required', HttpStatus.BAD_REQUEST);
+      }
+      
       // Oturumu kontrol et
       // MCP servisini kullanarak oturum bilgisini al
-      // const sessionInfo = await this.mcpService.getVideoSessionInfo(sessionId);
+      const sessionInfo = await this.mcpService.getVideoSessionInfo(sessionId);
       
       // Oturum aktif değilse aktifleştir
-      // if (sessionInfo && sessionInfo.status !== 'ACTIVE') {
-      //   this.logger.log(`Updating session ${sessionId} status from ${sessionInfo.status} to ACTIVE`);
-      //   await this.mcpService.updateVideoSessionStatus(sessionId, 'ACTIVE');
-      //   this.logger.log(`Session ${sessionId} status updated to ACTIVE`);
-      // } else if (!sessionInfo) {
-      //   this.logger.warn(`Session ${sessionId} not found, creating a new session record`);
-      //   // MCP servisine yeni oturum kaydı ekle
-      //   await this.mcpService.createVideoSession({
-      //     _id: sessionId,
-      //     id: sessionId,
-      //     status: 'ACTIVE',
-      //     timestamp: new Date().toISOString()
-      //   });
-      // }
+      if (sessionInfo && sessionInfo.status !== 'ACTIVE') {
+        this.logger.log(`Updating session ${sessionId} status from ${sessionInfo.status} to ACTIVE`);
+        await this.mcpService.updateVideoSessionStatus(sessionId, 'ACTIVE');
+        this.logger.log(`Session ${sessionId} status updated to ACTIVE`);
+      } else if (!sessionInfo) {
+        this.logger.warn(`Session ${sessionId} not found, creating a new session record`);
+        // MCP servisine yeni oturum kaydı ekle
+        await this.mcpService.createVideoSession({
+          _id: sessionId,
+          id: sessionId,
+          status: 'ACTIVE',
+          timestamp: new Date().toISOString()
+        });
+        this.logger.log(`New session record created for ${sessionId}`);
+      }
     } catch (error) {
       this.logger.error(`Error ensuring session is active: ${error.message}`);
-      // Bu bir destekleyici metod olduğu için hatayı yutuyoruz, ana operasyonu etkilememeli
+      throw new HttpException(
+        `Failed to ensure session is active: ${error.message}`,
+        HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
   

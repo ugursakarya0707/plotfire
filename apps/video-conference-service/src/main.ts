@@ -34,7 +34,7 @@ async function bootstrap() {
     }),
   );
   
-  const port = configService.get<number>('PORT', 3008);
+  const port = configService.get<number>('PORT', 3040);
   await app.listen(port);
   console.log(`Video Conference Service is running on port ${port}`);
 }

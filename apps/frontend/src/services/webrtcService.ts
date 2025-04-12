@@ -1,8 +1,51 @@
 // LiveKit proxy servis fonksiyonları
-import { LIVEKIT_PROXY_API_URL } from '../config';
+import { LIVEKIT_PROXY_API_URL, LIVEKIT_SERVICE_URL } from '../config';
+
+// LiveKit için basit tip tanımlamaları
+interface LiveKitRoom {
+  on: (event: string, callback: Function) => void;
+  connect: (url: string, token: string, options?: any) => Promise<void>;
+  disconnect: () => Promise<void>;
+  localParticipant?: LiveKitParticipant;
+  participants: Map<string, LiveKitParticipant>;
+  disconnectReason?: string;
+}
+
+interface LiveKitParticipant {
+  identity: string;
+  name?: string;
+  metadata?: string;
+  isSpeaking: boolean;
+  connectionQuality: number;
+  trackPublications: Map<string, LiveKitTrackPublication>;
+  isLocal?: boolean;
+  enableCameraAndMicrophone?: () => Promise<void>;
+}
+
+interface LiveKitTrackPublication {
+  kind: string;
+  trackName: string;
+  isMuted: boolean;
+  track?: LiveKitTrack;
+  mute: () => Promise<void>;
+  unmute: () => Promise<void>;
+}
+
+interface LiveKitTrack {
+  kind: string;
+  sid: string;
+  name?: string;
+}
+
+// LiveKit SDK - any tipini kullanarak uyumsuzluk hatalarını önleyelim
+interface LiveKitImport {
+  default: any;
+  Room: any;
+  LocalParticipant: any;
+}
 
 // LiveKit bağlantı durumunu takip etmek için global değişkenler
-let currentRoom: any = null;
+let currentRoom: LiveKitRoom | null = null;
 let isConnected = false;
 
 // LiveKit oturumunu başlat
@@ -14,16 +57,43 @@ export const initializeLiveKitSession = async (
   try {
     console.log(`Initializing LiveKit session for ${isTeacher ? 'teacher' : 'student'} ${userName} in session ${sessionId}`);
     
-    // LIVEKIT_PROXY_API_URL zaten '/api' içeriyorsa, doğrudan kullanıyoruz
-    const baseUrl = LIVEKIT_PROXY_API_URL.endsWith('/api') ? LIVEKIT_PROXY_API_URL.slice(0, -4) : LIVEKIT_PROXY_API_URL;
-    
-    // Oda adı olarak doğrudan sessionId kullan, özel formatlama yapma
+    // Oda adı olarak doğrudan sessionId kullan
     const roomName = sessionId;
     
-    console.log(`Using room name: ${roomName} for both teacher and student`);
+    console.log(`Using room name: ${roomName}`);
     
-    // Önce token al
-    const tokenResponse = await fetch(`${baseUrl}/api/livekit-proxy/token`, {
+    // Öğrenci ve öğretmen için farklı akışlar
+    if (isTeacher) {
+      console.log(`Teacher ${userName} joining existing room: ${roomName}`);
+    } else {
+      console.log(`Student ${userName} creating/joining room: ${roomName}`);
+      
+      // Öğrenci ise, önce odayı oluştur - livekit-service mikroservisini kullan
+      const createRoomResponse = await fetch(`${LIVEKIT_SERVICE_URL}/room`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          roomName: roomName,
+          metadata: JSON.stringify({
+            sessionId: sessionId,
+            createdBy: userName,
+            isTeacher: isTeacher
+          })
+        }),
+      });
+      
+      if (!createRoomResponse.ok) {
+        throw new Error(`Failed to create LiveKit room: Status ${createRoomResponse.status}`);
+      }
+      
+      console.log('Room created successfully');
+    }
+    
+    // Token al - livekit-service mikroservisini kullan
+    const tokenResponse = await fetch(`${LIVEKIT_SERVICE_URL}/token`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -50,133 +120,109 @@ export const initializeLiveKitSession = async (
       throw new Error('No token received from LiveKit proxy');
     }
     
-    // LiveKit client'ı başlat ve odaya bağlan
     try {
-      // Eğer zaten bir oda bağlantısı varsa, önce onu kapat
+      // LiveKit SDK'sını dinamik olarak import et
+      const LiveKit: LiveKitImport = await import('livekit-client');
+      
+      // Mevcut bir oda varsa ve bağlıysa, önce onu kapat
       if (currentRoom) {
         console.log('Disconnecting from previous room before connecting to new one');
-        await currentRoom.disconnect();
-        currentRoom = null;
-        isConnected = false;
+        try {
+          await currentRoom.disconnect();
+          isConnected = false;
+        } catch (disconnectError: any) {
+          console.warn('Error disconnecting from previous room:', disconnectError);
+          // Önceki odadan çıkış hatası kritik değil, devam et
+        }
       }
       
-      // Yeni oda bağlantısı oluştur - doğrudan any tipinde tanımla
-      const room: any = {};
+      // Yeni bir oda oluştur
+      const room = new LiveKit.Room();
       
-      // Event listener'ları manuel olarak ekle
-      const eventListeners: Record<string, Array<(...args: any[]) => void>> = {};
-      
-      // Event listener ekleme fonksiyonu
-      room.on = (event: string, callback: (...args: any[]) => void) => {
-        if (!eventListeners[event]) {
-          eventListeners[event] = [];
-        }
-        eventListeners[event].push(callback);
-        return room;
-      };
-      
-      // Event tetikleme fonksiyonu (LiveKit tarafından çağrılacak)
-      room.emit = (event: string, ...args: any[]) => {
-        const listeners = eventListeners[event] || [];
-        listeners.forEach(listener => listener(...args));
-        return room;
-      };
-      
-      // Disconnect fonksiyonu
-      room.disconnect = async () => {
-        console.log('Disconnecting from room');
-        // Disconnect event'ini tetikle
-        room.emit('disconnected');
-        isConnected = false;
-        return Promise.resolve();
-      };
-      
-      // Connect fonksiyonu
-      room.connect = async (url: string, token: string) => {
-        console.log(`Connecting to LiveKit at ${url} with token`);
-        // Burada gerçek bağlantı kurulacak
-        // Şimdilik sadece bağlantı kurulmuş gibi davranıyoruz
-        isConnected = true;
-        return Promise.resolve();
-      };
-      
-      // Oda adı ve katılımcı bilgileri
-      room.name = roomName;
-      room.localParticipant = {
-        identity: userName,
-        publishTrack: async (track: MediaStreamTrack, options: any) => {
-          console.log(`Publishing ${track.kind} track with options:`, options);
-          return Promise.resolve();
-        },
-        tracks: new Map()
-      };
-      
-      // Katılımcılar listesi
-      room.participants = new Map();
+      console.log('Room object created, setting up event listeners');
       
       // Oda olaylarını dinle
-      room.on('participantConnected', (participant: any) => {
-        console.log(`Participant connected: ${participant.identity}`);
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      room.on('participantConnected', (participant: LiveKitParticipant) => {
+        console.log(`Participant connected: ${participant.identity}`, participant);
+        console.log(`Participant metadata: ${participant.metadata}`);
+        
+        // Öğretmen bağlandığında öğrenci için veya öğrenci bağlandığında öğretmen için bildirim
+        const participantMetadata = participant.metadata || '';
+        if ((isTeacher && !participantMetadata.includes('teacher')) || 
+            (!isTeacher && participantMetadata.includes('teacher'))) {
+          console.log(`${isTeacher ? 'Student' : 'Teacher'} has joined the room!`);
+        }
       });
       
-      room.on('participantDisconnected', (participant: any) => {
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      room.on('participantDisconnected', (participant: LiveKitParticipant) => {
         console.log(`Participant disconnected: ${participant.identity}`);
+        console.log(`Participant metadata: ${participant.metadata}`);
       });
       
-      room.on('trackSubscribed', (track: any, publication: any, participant: any) => {
-        console.log(`Track subscribed: ${track.kind} from ${participant.identity}`);
-      });
-      
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
       room.on('disconnected', () => {
-        console.log('Disconnected from room');
+        console.log('Room disconnected');
+        console.log('Disconnect reason:', room.disconnectReason);
         isConnected = false;
       });
       
-      // Odaya bağlan
-      await room.connect(`${baseUrl}/api`, tokenData.token);
-      console.log(`Connected to room: ${room.name || roomName}`);
-      
-      // Yerel katılımcı bilgilerini ayarla
-      const localParticipant = room.localParticipant;
-      console.log(`Local participant: ${localParticipant?.identity || userName}`);
-      
-      // Medya izinlerini al ve yayınla
-      try {
-        // Kamera ve mikrofon için izin al
-        const mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: true,
-          video: true
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      room.on('connected', () => {
+        console.log('Room connected successfully');
+        if (room.localParticipant) {
+          console.log(`Local participant: ${room.localParticipant.identity}`);
+          console.log(`Local participant state:`, room.localParticipant);
+        }
+        console.log(`Remote participants: ${room.participants.size}`);
+        // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+        Array.from(room.participants.values()).forEach((p: any, i) => {
+          console.log(`Remote participant ${i+1}: ${p.identity}, metadata: ${p.metadata}`);
         });
-        
-        // Ses ve video parçalarını ayır
-        const audioTrack = mediaStream.getAudioTracks()[0];
-        const videoTrack = mediaStream.getVideoTracks()[0];
-        
-        if (audioTrack && localParticipant?.publishTrack) {
-          await localParticipant.publishTrack(audioTrack, {
-            name: 'microphone',
-          });
-          console.log('Audio track published');
-        }
-        
-        if (videoTrack && localParticipant?.publishTrack) {
-          await localParticipant.publishTrack(videoTrack, {
-            name: 'camera',
-            simulcast: true,
-          });
-          console.log('Video track published');
-        }
-      } catch (mediaError) {
-        console.error('Error accessing media devices:', mediaError);
-      }
+        isConnected = true;
+      });
       
-      // Global değişkenleri güncelle
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      room.on('reconnecting', () => {
+        console.log('Attempting to reconnect to room...');
+      });
+      
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      room.on('reconnected', () => {
+        console.log('Reconnected to room successfully');
+        isConnected = true;
+      });
+      
+      // LiveKit WebSocket URL'sini oluştur
+      const wsUrl = tokenData.wsUrl || 'wss://postply-s2s0711i.livekit.cloud';
+      console.log(`Connecting to LiveKit WebSocket URL: ${wsUrl}`);
+      
+      // Odaya bağlan
+      console.log('Connecting to room with token:', tokenData.token.substring(0, 20) + '...');
+      
+      // @ts-ignore - LiveKit versiyonu ile ilgili TypeScript hatalarını görmezden gel
+      await room.connect(wsUrl, tokenData.token, {
+        autoSubscribe: true,
+      });
+      
+      console.log('Connected to room successfully');
+      
+      // Odayı global değişkene kaydet
       currentRoom = room;
-      isConnected = true;
+      
+      // 2 saniye sonra katılımcıları kontrol et
+      setTimeout(async () => {
+        console.log('Checking participants after connection...');
+        const participants = await getLiveKitParticipants(sessionId);
+        console.log(`Participants after connection: ${participants.length}`);
+        participants.forEach((p, i) => {
+          console.log(`Participant ${i+1}: ${p.identity}`);
+        });
+      }, 2000);
       
       return {
-        success: true,
-        room: room,
+        room,
         token: tokenData.token,
         roomName: roomName,
         userName: userName,
@@ -198,43 +244,116 @@ export const getLiveKitParticipants = async (sessionId: string): Promise<any[]> 
     console.log(`Getting participants for session: ${sessionId}`);
     
     // Eğer zaten bağlı bir oda varsa, doğrudan ondan katılımcıları al
-    if (currentRoom && isConnected && currentRoom.participants) {
+    if (currentRoom && isConnected) {
+      console.log('Getting participants from connected room');
       const participants = Array.from(currentRoom.participants.values());
-      const participantsData = participants.map((p: any) => ({
+      
+      // Katılımcı sayısını logla
+      console.log(`Found ${participants.length} participants in connected room`);
+      
+      // Katılımcı veri tipi tanımı
+      interface ParticipantData {
+        identity: string;
+        name: string;
+        metadata?: string;
+        isSpeaking: boolean;
+        connectionQuality: number;
+        isLocal?: boolean;
+        tracks: {
+          kind: any;
+          name: any;
+          isEnabled: boolean;
+        }[];
+      }
+      
+      // Katılımcıları dönüştür
+      const participantsData: ParticipantData[] = participants.map((p: LiveKitParticipant) => ({
         identity: p.identity,
-        name: p.name,
+        name: p.name || p.identity,
         metadata: p.metadata,
         isSpeaking: p.isSpeaking,
         connectionQuality: p.connectionQuality,
-        tracks: Array.from(p.tracks?.values() || []).map((t: any) => ({
+        tracks: Array.from(p.trackPublications.values()).map((t) => ({
           kind: t.kind,
           name: t.trackName,
           isEnabled: !t.isMuted,
         })),
       }));
       
+      // Yerel katılımcıyı da ekle
+      if (currentRoom.localParticipant) {
+        const localParticipant = currentRoom.localParticipant;
+        participantsData.push({
+          identity: localParticipant.identity,
+          name: localParticipant.name || localParticipant.identity,
+          metadata: localParticipant.metadata,
+          isSpeaking: localParticipant.isSpeaking,
+          connectionQuality: localParticipant.connectionQuality,
+          isLocal: true,
+          tracks: Array.from(localParticipant.trackPublications.values()).map((t) => ({
+            kind: t.kind,
+            name: t.trackName,
+            isEnabled: !t.isMuted,
+          })),
+        });
+      }
+      
       return participantsData;
     }
     
     // Eğer bağlı değilsek, API üzerinden katılımcıları al
-    const baseUrl = LIVEKIT_PROXY_API_URL.endsWith('/api') ? LIVEKIT_PROXY_API_URL.slice(0, -4) : LIVEKIT_PROXY_API_URL;
-    const response = await fetch(`${baseUrl}/api/video-conference/livekit/participants/${sessionId}`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.warn(`Error getting participants: ${response.status}`);
-      return [];
+    console.log('Getting participants from API');
+    
+    try {
+      // Önce session detaylarını al
+      const baseUrl = LIVEKIT_PROXY_API_URL.endsWith('/api') ? LIVEKIT_PROXY_API_URL.slice(0, -4) : LIVEKIT_PROXY_API_URL;
+      const sessionDetailsResponse = await fetch(`${baseUrl}/api/video-sessions/${sessionId}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!sessionDetailsResponse.ok) {
+        throw new Error(`Failed to get session details. Status: ${sessionDetailsResponse.status}`);
+      }
+      
+      const sessionDetails = await sessionDetailsResponse.json();
+      console.log('Session details:', sessionDetails);
+      
+      // Session detaylarından roomName'i al
+      const roomName = sessionDetails.roomName || `room_${sessionId}`;
+      console.log(`Using room name from session details: ${roomName}`);
+      
+      // LiveKit API'sine istek gönder - roomName kullanarak
+      const response = await fetch(`${LIVEKIT_SERVICE_URL}/participants/${roomName}`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`LiveKit API error: Failed to get participants. Status: ${response.status}`);
+      }
+      
+      const data = await response.json();
+      console.log('Participants response:', data);
+      
+      if (!data.participants || data.participants.length === 0) {
+        console.log('No participants found in the room');
+      }
+      
+      return data.participants || [];
+    } catch (error: any) {
+      console.error('Error getting LiveKit participants:', error);
+      // Hatayı gizlemek yerine fırlat
+      throw new Error(`Failed to get participants: ${error.message}`);
     }
-
-    const data = await response.json();
-    return data.participants || [];
   } catch (error: any) {
     console.error('Error getting LiveKit participants:', error);
-    return [];
+    // Hatayı gizlemek yerine fırlat
+    throw new Error(`Failed to get participants: ${error.message}`);
   }
 };
 
@@ -252,8 +371,7 @@ export const endLiveKitSession = async (sessionId: string): Promise<void> => {
     }
     
     // API üzerinden oturumu sonlandır
-    const baseUrl = LIVEKIT_PROXY_API_URL.endsWith('/api') ? LIVEKIT_PROXY_API_URL.slice(0, -4) : LIVEKIT_PROXY_API_URL;
-    const response = await fetch(`${baseUrl}/api/video-conference/livekit/end-session`, {
+    const response = await fetch(`${LIVEKIT_SERVICE_URL}/end-session`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -265,10 +383,13 @@ export const endLiveKitSession = async (sessionId: string): Promise<void> => {
     });
 
     if (!response.ok) {
-      console.warn(`Error ending session: ${response.status}`);
+      throw new Error(`Failed to end LiveKit session: Status ${response.status}`);
     }
+    
+    console.log('LiveKit session ended successfully');
   } catch (error: any) {
     console.error('Error ending LiveKit session:', error);
+    throw new Error(`Failed to end LiveKit session: ${error.message}`);
   }
 };
 
@@ -276,31 +397,33 @@ export const endLiveKitSession = async (sessionId: string): Promise<void> => {
 export const toggleCamera = async (enabled: boolean): Promise<void> => {
   try {
     if (!currentRoom || !isConnected) {
-      console.warn('Cannot toggle camera: not connected to a room');
-      return;
+      throw new Error('Cannot toggle camera: not connected to a LiveKit room');
     }
     
     const localParticipant = currentRoom.localParticipant;
-    if (!localParticipant || !localParticipant.tracks) {
-      console.warn('Cannot toggle camera: local participant not available');
-      return;
+    if (!localParticipant) {
+      throw new Error('Cannot toggle camera: local participant not available');
     }
     
-    const videoTracks = Array.from(localParticipant.tracks.values())
-      .filter((publication: any) => publication.kind === 'video');
+    const videoTracks = Array.from(localParticipant.trackPublications.values())
+      .filter((publication) => publication.kind === 'video');
+    
+    if (videoTracks.length === 0) {
+      throw new Error('No video tracks found to toggle');
+    }
     
     for (const publication of videoTracks) {
       if (enabled) {
-        // TypeScript hatalarını önlemek için any tipine dönüştür
-        await (publication as any).unmute();
+        await publication.unmute();
       } else {
-        await (publication as any).mute();
+        await publication.mute();
       }
     }
     
     console.log(`Camera ${enabled ? 'enabled' : 'disabled'}`);
   } catch (error: any) {
     console.error('Error toggling camera:', error);
+    throw new Error(`Failed to toggle camera: ${error.message}`);
   }
 };
 
@@ -308,31 +431,33 @@ export const toggleCamera = async (enabled: boolean): Promise<void> => {
 export const toggleMicrophone = async (enabled: boolean): Promise<void> => {
   try {
     if (!currentRoom || !isConnected) {
-      console.warn('Cannot toggle microphone: not connected to a room');
-      return;
+      throw new Error('Cannot toggle microphone: not connected to a LiveKit room');
     }
     
     const localParticipant = currentRoom.localParticipant;
-    if (!localParticipant || !localParticipant.tracks) {
-      console.warn('Cannot toggle microphone: local participant not available');
-      return;
+    if (!localParticipant) {
+      throw new Error('Cannot toggle microphone: local participant not available');
     }
     
-    const audioTracks = Array.from(localParticipant.tracks.values())
-      .filter((publication: any) => publication.kind === 'audio');
+    const audioTracks = Array.from(localParticipant.trackPublications.values())
+      .filter((publication) => publication.kind === 'audio');
+    
+    if (audioTracks.length === 0) {
+      throw new Error('No audio tracks found to toggle');
+    }
     
     for (const publication of audioTracks) {
       if (enabled) {
-        // TypeScript hatalarını önlemek için any tipine dönüştür
-        await (publication as any).unmute();
+        await publication.unmute();
       } else {
-        await (publication as any).mute();
+        await publication.mute();
       }
     }
     
     console.log(`Microphone ${enabled ? 'enabled' : 'disabled'}`);
   } catch (error: any) {
     console.error('Error toggling microphone:', error);
+    throw new Error(`Failed to toggle microphone: ${error.message}`);
   }
 };
 
@@ -342,6 +467,6 @@ export const isRoomConnected = (): boolean => {
 };
 
 // Mevcut odayı al
-export const getCurrentRoom = (): any => {
+export const getCurrentRoom = (): LiveKitRoom | null => {
   return currentRoom;
 };
